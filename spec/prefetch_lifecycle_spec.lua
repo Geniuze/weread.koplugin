@@ -38,6 +38,7 @@ package.preload["weread.lib.plugin_util"] = function()
         display_error = function(value) return tostring(value) end,
         log_error = function(value) return tostring(value) end,
         file_exists = function(path) return existing[path] == true end,
+        catalog_healed = setmetatable({}, { __mode = "k" }),
     }
 end
 

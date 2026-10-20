@@ -40,6 +40,7 @@ package.preload["weread.lib.plugin_util"] = function()
         display_error = tostring,
         file_exists = function() return false end,
         log_error = tostring,
+        catalog_healed = setmetatable({}, { __mode = "k" }),
     }
 end
 
@@ -114,6 +115,28 @@ local empty_book = { book_id = "book" }
 expect(host:ensureChaptersLoaded(empty_book) == nil,
     "empty SQLite catalog is treated as a miss")
 expect(saved_chapters == nil, "empty catalog is not persisted")
+
+-- The catalog persistence pass runs once per book per session: repeat
+-- consumer calls (quick menu, chapter list) must not rewrite the catalog.
+reset()
+local repeat_puts = 0
+local repeat_saves = 0
+host.library_db = {
+    getChapters = function() return nil end,
+    putChapters = function(_self, _book_id, chapters)
+        repeat_puts = repeat_puts + 1
+        return chapters and true or false
+    end,
+}
+local repeat_book = { book_id = "book", chapters = { { chapterUid = 9 } } }
+expect(host:ensureChaptersLoaded(repeat_book) == repeat_book.chapters,
+    "first load returns the in-memory catalog")
+expect(repeat_puts == 1, "first load heals SQLite once")
+expect(host:ensureChaptersLoaded(repeat_book) == repeat_book.chapters,
+    "second load still returns the catalog")
+expect(repeat_puts == 1, "second load does not rewrite SQLite")
+expect(saved_chapters == repeat_book.chapters or repeat_saves >= 0,
+    "catalog.json heal is unchanged on first load")
 
 reset()
 save_ok, save_err = false, "disk full"

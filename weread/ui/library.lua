@@ -17,6 +17,8 @@ local T = PluginUtil.T
 local log_error = PluginUtil.log_error
 local display_error = PluginUtil.display_error
 local file_exists = PluginUtil.file_exists
+-- Shared one-heal-per-session gate for chapter catalog persistence.
+local healed_catalogs = PluginUtil.catalog_healed
 
 local M = {}
 local sortBooks
@@ -1204,7 +1206,16 @@ end
 
 function M:loadChapters(book, callback, force_refresh)
     if not force_refresh then
-        if book.chapters and #book.chapters > 0 then
+        -- Same one-heal-per-session gate as ensureChaptersLoaded: the catalog
+        -- only changes when fetched, so skip the per-call persistence once
+        -- this book's catalog has already been healed.
+        if healed_catalogs[book] then
+            if type(book.chapters) == "table" and #book.chapters > 0 then
+                callback(book.chapters)
+                return
+            end
+        elseif type(book.chapters) == "table" and #book.chapters > 0 then
+            healed_catalogs[book] = true
             local book_id = book.book_id or book.bookId
             if self.library_db and book_id then
                 self.library_db:putChapters(book_id, book.chapters)

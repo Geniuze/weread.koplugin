@@ -366,8 +366,19 @@ function M:detectWeReadBook()
     return nil
 end
 
+-- Self-healing writes the chapter catalog back into SQLite/catalog.json once
+-- per plugin session per book (gate shared via PluginUtil.catalog_healed).
+-- The catalog itself only changes when it is fetched or refreshed; re-writing
+-- it on every consumer (quick menu, chapter list, progress sync) costs a full
+-- SQLite rewrite of every chapter row on the UI thread.
+local healed_catalogs = PluginUtil.catalog_healed
+
 function M:ensureChaptersLoaded(book)
     if not book then return nil end
+    if healed_catalogs[book] then
+        return type(book.chapters) == "table" and book.chapters or nil
+    end
+    healed_catalogs[book] = true
     if type(book.chapters) == "table" and #book.chapters > 0 then
         local book_id = book.book_id or book.bookId
         if self.library_db and book_id then

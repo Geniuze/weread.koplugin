@@ -64,6 +64,32 @@ function Content.catalog_cache_path(settings, book)
     return Content.book_resolved_dir(settings, book_id, book) .. "/catalog.json"
 end
 
+-- Recursive mkdir without forking a shell: each os.execute on an e-ink
+-- device costs a fork+exec visible to the user in UI-thread paths.
+local function load_lfs()
+    local ok_lfs, lfs = pcall(require, "libs/libkoreader-lfs")
+    if not ok_lfs then ok_lfs, lfs = pcall(require, "lfs") end
+    return ok_lfs and lfs or nil
+end
+
+local function ensure_parent_dir(path)
+    local lfs = load_lfs()
+    if not lfs then return end
+    local dir = path:match("^(.*)/[^/]+$")
+    if not dir or dir == "" then return end
+    local parts = {}
+    for part in dir:gmatch("[^/]+") do
+        parts[#parts + 1] = part
+    end
+    local current = dir:sub(1, 1) == "/" and "" or nil
+    for _i, part in ipairs(parts) do
+        current = current and (current .. "/" .. part) or part
+        if lfs.attributes(current, "mode") ~= "directory" then
+            pcall(lfs.mkdir, current)
+        end
+    end
+end
+
 function Content.save_catalog_cache(client, settings, book, chapters)
     if type(chapters) ~= "table" then
         return false, "chapter list is not a table"
@@ -72,8 +98,7 @@ function Content.save_catalog_cache(client, settings, book, chapters)
     if not path then
         return false, "missing book id"
     end
-    local dir = path:match("^(.*)/[^/]+$")
-    os.execute("mkdir -p " .. string.format("%q", dir))
+    ensure_parent_dir(path)
     local ok, encoded = pcall(function()
         return client:json_encode({
             version = 1,
