@@ -361,6 +361,25 @@ function M:getSettingsMenuItems()
                                 end
                             end),
                     },
+                    {
+                        text = _("Background progress upload"),
+                        keep_menu_open = true,
+                        check_callback_updates_menu = true,
+                        checked_func = function()
+                            return self.settings:get("sync").background_upload ~= false
+                        end,
+                        callback = self:safeCallback(_("Background progress upload"),
+                            function(touchmenu_instance)
+                                local sync = self.settings:get("sync")
+                                sync.background_upload =
+                                    not (sync.background_upload ~= false)
+                                self.settings:set("sync", sync)
+                                self.settings:flush()
+                                if touchmenu_instance then
+                                    touchmenu_instance:updateItems()
+                                end
+                            end),
+                    },
                 }
             end,
         },

@@ -214,6 +214,7 @@ local zh = {
     ["Progress management"] = "进度管理",
     ["Pull progress on open"] = "打开时拉取进度",
     ["Upload progress on close"] = "关闭时上传进度",
+    ["Background progress upload"] = "后台上传进度",
     ["Reading progress sync"] = "阅读进度同步",
     ["Use WeRead progress"] = "使用微信读书进度",
     ["Keep KOReader progress"] = "保留 KOReader 进度",

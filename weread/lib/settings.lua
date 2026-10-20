@@ -28,6 +28,9 @@ local defaults = {
         upload_on_close = false,
         ask_on_conflict = true,
         upload_interval_minutes = 0,
+        -- Upload runs in the report subprocess so page turns never block on
+        -- the upload network pipeline. Set false to upload inline (blocking).
+        background_upload = true,
     },
     cache = {
         download_book_images = true,
