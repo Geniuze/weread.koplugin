@@ -356,23 +356,10 @@ function ProgressSync:_upload_snapshot(position, reason, show_result)
     self.uploading = true
     self.state = "uploading"
     local attempts = 0
-    local attempt
-    attempt = function()
-        attempts = attempts + 1
-        local ok, accepted, outcome = pcall(
-            self.upload_position,
-            book_id,
-            copy(position),
-            0
-        )
-        if ok and not accepted and type(outcome) == "table"
-            and outcome.error_kind == "busy"
-            and attempts < BUSY_RETRY_LIMIT then
-            self.scheduler:scheduleIn(BUSY_RETRY_SECONDS, attempt)
-            return
-        end
+    local finished
+    finished = function(outcome)
         self.uploading = false
-        if ok and accepted then
+        if type(outcome) == "table" and outcome.accepted then
             self.state = "verified"
             self.dirty = false
             self.last_uploaded_position = copy(position)
@@ -393,17 +380,45 @@ function ProgressSync:_upload_snapshot(position, reason, show_result)
             end
             return
         end
-        local error_message = ok and type(outcome) == "table"
-            and outcome.error or outcome
+        local error_message = type(outcome) == "table"
+            and outcome.error or "upload_failed"
         self.state = "error"
         self:_persist(book_id, {
-            last_sync_error = tostring(error_message or "upload_failed"),
+            last_sync_error = tostring(error_message),
         })
         log("warn", "upload failed:", tostring(error_message))
         if show_result then
             self.notify("upload_failed", {
-                error = tostring(error_message or "upload_failed"),
+                error = tostring(error_message),
             })
+        end
+    end
+    local attempt
+    attempt = function()
+        attempts = attempts + 1
+        -- background_upload=false keeps the old blocking inline upload.
+        local inline = self:_config().background_upload == false
+        local started, result = self.upload_position(
+            book_id, position, 0, finished, { inline = inline })
+        if started then
+            return
+        end
+        -- Not started: read_report is running its own pipeline (periodic
+        -- report or another upload). Retry with the same immutable snapshot.
+        if attempts < BUSY_RETRY_LIMIT then
+            self.scheduler:scheduleIn(BUSY_RETRY_SECONDS, attempt)
+            return
+        end
+        self.uploading = false
+        self.state = "error"
+        local error_message = type(result) == "table"
+            and result.error or "read_report_busy"
+        self:_persist(book_id, {
+            last_sync_error = tostring(error_message),
+        })
+        log("warn", "upload failed:", tostring(error_message))
+        if show_result then
+            self.notify("upload_failed", { error = tostring(error_message) })
         end
     end
     local started = self.run_online("progress_upload", attempt)

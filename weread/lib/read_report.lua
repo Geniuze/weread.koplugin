@@ -358,6 +358,10 @@ function ReadReport:stop(reason)
     if self.job then
         self:_abandon_job(self.job)
     end
+    -- An in-flight async upload is NOT cancelled here: document close and
+    -- suspend spawn uploads just before stop() runs, and letting them finish
+    -- is the point of upload_on_close. The poll chain stops itself on
+    -- completion or timeout and never schedules periodic ticks.
     self.state = reason == "suspend" and "suspended"
         or "stopped"
     self.stop_reason = reason
@@ -751,7 +755,7 @@ end
 -- Child entry point. Neuters settings persistence inside the fork and
 -- captures auth changes (Set-Cookie merges, cookie renewal) so the parent
 -- can persist them from the outcome.
-function ReadReport:_child_report(book_id, allow_renewal, position)
+function ReadReport:_child_report(book_id, allow_renewal, position, elapsed_seconds)
     self._no_persist = true
     self.settings.flush = function() end
     local auth_changed = false
@@ -767,6 +771,7 @@ function ReadReport:_child_report(book_id, allow_renewal, position)
         return self:_run_pipeline(book_id, {
             allow_renewal = allow_renewal,
             position = position,
+            elapsed_seconds = elapsed_seconds,
         })
     end)
     if not ok then
@@ -895,6 +900,185 @@ function ReadReport:_run_pipeline(book_id, opts)
     outcome.error_kind = final_ok and "server" or "transport"
     outcome.error_prefix = "read report final retry failed:"
     return outcome
+end
+
+-- Start a progress upload as a subprocess so the UI loop (page turns,
+-- e-ink refresh) never blocks on the upload network pipeline. Reuses the
+-- same child pipeline as the periodic report; the outcome travels back
+-- through the pipe and is applied with the same fingerprint guards.
+-- Returns true when the upload was spawned or completed inline (terminal),
+-- false when it could not start.
+function ReadReport:upload_position_async(book_id, position, elapsed_seconds, on_done, options)
+    -- Serialize with any in-flight periodic report or upload: both drive
+    -- report_read pipelines and cookie renewal must stay single-flight.
+    if self.upload_job or self.job then
+        return false, { error = "read_report_busy", error_kind = "busy" }
+    end
+    local runner = self.subprocess
+    if options and options.inline then
+        -- Caller explicitly requested the blocking inline pipeline.
+        runner = nil
+    end
+    if not runner or type(runner.run) ~= "function" then
+        -- Inline fallback: same blocking pipeline as before. on_done fires
+        -- synchronously so the caller's state machine stays uniform.
+        local accepted, outcome = self:upload_position(book_id, position, elapsed_seconds)
+        if type(on_done) == "function" then
+            pcall(on_done, accepted and outcome
+                or { accepted = false, error = tostring(outcome),
+                    error_kind = "error" })
+        end
+        return true
+    end
+    local pid, read_fd = runner.run(function(_pid, child_write_fd)
+        -- elapsed_seconds=0 keeps the upload from counting reading time,
+        -- matching the previous inline progress-upload contract.
+        local outcome = self:_child_report(
+            tostring(book_id), self:_renewal_allowed(), position,
+            elapsed_seconds or 0)
+        local ok, encoded = pcall(function()
+            return self.client:json_encode(outcome)
+        end)
+        if not ok or type(encoded) ~= "string" then
+            encoded = '{"accepted":false,"error":"failed to serialize upload outcome",'
+                .. '"error_kind":"job"}'
+        end
+        runner.write_all(child_write_fd, encoded)
+    end)
+    if not pid then
+        log("warn", "upload subprocess failed, reporting inline:",
+            tostring(read_fd))
+        local accepted, outcome = self:upload_position(book_id, position, elapsed_seconds)
+        if type(on_done) == "function" then
+            pcall(on_done, accepted and outcome
+                or { accepted = false, error = tostring(outcome),
+                    error_kind = "error" })
+        end
+        return true
+    end
+
+    local job = {
+        pid = pid,
+        read_fd = read_fd,
+        book_id = tostring(book_id),
+        started_at = self.now(),
+        poll_interval = JOB_POLL_INITIAL_SECONDS,
+        auth_fingerprint = self:_auth_fingerprint(),
+        context_fingerprint = self:_context_fingerprint(book_id),
+        on_done = on_done,
+    }
+    job.poll = function()
+        self:_poll_upload_job(job)
+    end
+    self.upload_job = job
+    self.scheduler:scheduleIn(job.poll_interval, job.poll)
+    log("info", "progress upload moved to subprocess:", "book_id=", job.book_id)
+    return true
+end
+
+function ReadReport:_poll_upload_job(job)
+    if self.upload_job ~= job then
+        return
+    end
+    local runner = self.subprocess
+    local done = runner.is_done(job.pid)
+    local readable = job.read_fd and runner.read_size(job.read_fd)
+    if done or (readable and readable > 0) then
+        local payload
+        if job.read_fd then
+            payload = runner.read_all(job.read_fd)
+            job.read_fd = nil
+        end
+        self.upload_job = nil
+        if not done then
+            self:_collect_pid(job.pid)
+        end
+        local outcome = self:_decode_outcome(payload)
+        if type(outcome) == "table" and type(outcome.auth) == "table" then
+            if self:_auth_fingerprint() ~= job.auth_fingerprint then
+                log("info", "skip upload auth write-back: parent auth changed during upload")
+            else
+                local ok, err = pcall(function()
+                    self.settings:update_auth({
+                        cookies = outcome.auth.cookies,
+                        wr_ticket = outcome.auth.wr_ticket,
+                        wr_wrpa = outcome.auth.wr_wrpa,
+                    }, { replace_cookies = true })
+                end)
+                if not ok then
+                    log("warn", "persist upload renewed auth failed:", tostring(err))
+                end
+            end
+        end
+        if type(outcome) == "table" and type(outcome.book) == "table" then
+            if self:_context_fingerprint(job.book_id) ~= job.context_fingerprint then
+                log("info", "skip upload context write-back: parent record changed during upload")
+            else
+                local ok, err = pcall(function()
+                    self:_persist_context(job.book_id, outcome.book)
+                end)
+                if not ok then
+                    log("warn", "persist upload context failed:", tostring(err))
+                end
+            end
+        end
+        -- Keep last_renew_attempt bookkeeping consistent with the inline path.
+        if type(outcome) == "table" and outcome.renew_attempted then
+            self.last_renew_attempt = self.now()
+        end
+        if type(job.on_done) == "function" then
+            pcall(job.on_done, outcome)
+        end
+        return
+    end
+    if self.now() - job.started_at > JOB_TIMEOUT_SECONDS then
+        log("warn", "upload job timed out, terminating:", "pid=", job.pid)
+        self:_abandon_upload_job(job)
+        if type(job.on_done) == "function" then
+            pcall(job.on_done, {
+                accepted = false,
+                error = "upload job timed out",
+                error_kind = "transport",
+                error_prefix = "progress upload failed:",
+            })
+        end
+        return
+    end
+    job.poll_interval = math.min(job.poll_interval * 2, JOB_POLL_MAX_SECONDS)
+    self.scheduler:scheduleIn(job.poll_interval, job.poll)
+end
+
+-- Kill a running upload job and keep reaping until collected, mirroring
+-- _abandon_job so a stopped upload never leaves a zombie behind.
+function ReadReport:_abandon_upload_job(job)
+    job = job or self.upload_job
+    if not job then
+        return
+    end
+    if self.upload_job == job then
+        self.upload_job = nil
+    end
+    local runner = self.subprocess
+    if job.poll then
+        self.scheduler:unschedule(job.poll)
+    end
+    runner.terminate(job.pid)
+    local collect
+    collect = function()
+        if runner.is_done(job.pid) then
+            if job.read_fd then
+                runner.read_all(job.read_fd)
+                job.read_fd = nil
+            end
+            return
+        end
+        if job.read_fd and (runner.read_size(job.read_fd) or 0) ~= 0 then
+            runner.read_all(job.read_fd)
+            job.read_fd = nil
+        end
+        self.scheduler:scheduleIn(JOB_COLLECT_INTERVAL_SECONDS, collect)
+    end
+    collect()
 end
 
 -- Inline (blocking) report used when subprocess support is unavailable.

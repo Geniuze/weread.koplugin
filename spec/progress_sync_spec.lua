@@ -103,10 +103,13 @@ local function fixture(remote, options)
             callback()
             return true
         end,
-        upload_position = function(_book_id, position, elapsed)
+        upload_position = function(_book_id, position, elapsed, on_done)
             uploads[#uploads + 1] = position
             eq(elapsed, 0, "progress upload has zero reading time")
-            return true, { accepted = true }
+            if type(on_done) == "function" then
+                on_done({ accepted = true })
+            end
+            return true
         end,
         goto_fraction = function(fraction)
             jumps[#jumps + 1] = fraction
@@ -309,13 +312,16 @@ test("busy read report is retried with the immutable snapshot", function()
     })
     local attempts = 0
     local uploaded
-    f.sync.upload_position = function(_book_id, position)
+    f.sync.upload_position = function(_book_id, position, _elapsed, on_done)
         attempts = attempts + 1
         if attempts == 1 then
             return false, { error = "busy", error_kind = "busy" }
         end
         uploaded = position
-        return true, { accepted = true }
+        if type(on_done) == "function" then
+            on_done({ accepted = true })
+        end
+        return true
     end
     f.sync:on_reader_ready()
     f.drain()

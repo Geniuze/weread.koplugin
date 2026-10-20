@@ -170,9 +170,9 @@ function WeReadPlugin:init()
             return self:runOnlineTask(
                 _("Sync progress"), callback, nil, run_options)
         end,
-        upload_position = function(book_id, position, elapsed_seconds)
-            return self.read_report:upload_position(
-                book_id, position, elapsed_seconds)
+        upload_position = function(book_id, position, elapsed_seconds, on_done, options)
+            return self.read_report:upload_position_async(
+                book_id, position, elapsed_seconds, on_done, options)
         end,
         goto_fraction = function(fraction)
             local percent = math.floor(
