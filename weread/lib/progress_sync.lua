@@ -523,21 +523,6 @@ function ProgressSync:_resolve(local_position, remote, context, options)
         })
         return
     end
-
-    if comparison == "remote_ahead" then
-        local ok, reason = self:_apply_remote(
-            remote, context, { manual = options.manual })
-        if not ok then
-            self.state = "error"
-            self.notify("jump_failed", { error = reason })
-        end
-    else
-        self:_keep_local(local_position, remote, {
-            manual = options.manual,
-            upload_now = options.manual == true,
-            reason = "manual_sync",
-        })
-    end
 end
 
 function ProgressSync:_schedule_pull_retry(options, retry_token)
