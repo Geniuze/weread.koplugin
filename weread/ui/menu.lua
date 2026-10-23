@@ -484,6 +484,52 @@ function M:getSettingsMenuItems()
                                         end),
                                 },
                                 {
+                                    text = _("Prefetch ahead"),
+                                    keep_menu_open = true,
+                                    check_callback_updates_menu = true,
+                                    enabled_func = function()
+                                        return self.settings:get("cache").auto_prefetch_next_chapter
+                                            == true
+                                    end,
+                                    sub_item_table_func = function()
+                                        local counts = { 1, 5, 10, 20, 50 }
+                                        local items = {}
+                                        for _i, count in ipairs(counts) do
+                                            items[#items + 1] = {
+                                                text_func = function()
+                                                    return count == 1
+                                                        and _("Next chapter only")
+                                                        or T(_("Next %1 chapters"), tostring(count))
+                                                end,
+                                                checked_func = function()
+                                                    local cache = self.settings:get("cache")
+                                                    return (tonumber(cache.prefetch_next_chapter_count) or 1) == count
+                                                end,
+                                                callback = self:safeCallback(
+                                                    _("Prefetch ahead"), function(touchmenu_instance)
+                                                        local cache = self.settings:get("cache")
+                                                        cache.prefetch_next_chapter_count = count
+                                                        self.settings:set("cache", cache)
+                                                        self.settings:flush()
+                                                        if self._current_weread_book_id
+                                                            and not self.downloader:getActivePrefetch() then
+                                                            local book_id = self._current_weread_book_id
+                                                            UIManager:scheduleIn(0.1, function()
+                                                                if self._current_weread_book_id == book_id then
+                                                                    self:maybePrefetchNextChapter(book_id)
+                                                                end
+                                                            end)
+                                                        end
+                                                        if touchmenu_instance then
+                                                            touchmenu_instance:updateItems()
+                                                        end
+                                                    end),
+                                            }
+                                        end
+                                        return items
+                                    end,
+                                },
+                                {
                                     text = _("Prefetch underlines and thoughts"),
                                     keep_menu_open = true,
                                     check_callback_updates_menu = true,

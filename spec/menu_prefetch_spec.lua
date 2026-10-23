@@ -41,7 +41,12 @@ end
 package.preload["weread.lib.plugin_util"] = function()
     return {
         tr = function(text) return text end,
-        T = function(text) return text end,
+        T = function(text, ...)
+            local values = { ... }
+            return (text:gsub("%%(%d+)", function(index)
+                return tostring(values[tonumber(index)] or "")
+            end))
+        end,
     }
 end
 
@@ -52,6 +57,16 @@ for _, module in ipairs({
     package.preload[module] = function()
         return { tools = { "statistics", "more_tools" } }
     end
+end
+package.preload["ffi/util"] = function()
+    return {
+        template = function(text, ...)
+            local values = { ... }
+            return (text:gsub("%%(%d+)", function(index)
+                return tostring(values[tonumber(index)] or "")
+            end))
+        end,
+    }
 end
 
 local Menu = require("weread.ui.menu")
@@ -247,9 +262,9 @@ for index, item in ipairs(about_items or {}) do
     expect(item.keep_menu_open == true,
         "about item " .. index .. " keeps the menu open")
 end
-expect(about_items[1] and about_items[1].text == "Version %1",
+expect(about_items[1] and about_items[1].text == "Version test",
     "version is the first about item")
-expect(about_items[2] and about_items[2].text == "Author: %1",
+expect(about_items[2] and about_items[2].text == "Author: finlater",
     "author is the second about item")
 expect(about_items[3] and about_items[3].text == "Check for updates"
         and about_items[4].text == "Automatically check once an hour"
@@ -258,7 +273,7 @@ expect(about_items[3] and about_items[3].text == "Check for updates"
 available_version = "0.7.0"
 local update_available_items = last_settings_item.sub_item_table_func()
 expect(#update_available_items == 5
-        and update_available_items[3].text == "Update to v%1",
+        and update_available_items[3].text == "Update to v0.7.0",
     "available update replaces the check item without adding a sixth item")
 available_version = nil
 about_items[1].callback()
@@ -341,20 +356,28 @@ expect(prefetch ~= nil, "download settings contain a prefetch submenu")
 expect(footnote_popup == nil, "footnote display is controlled by the reader")
 
 local prefetch_items = prefetch and prefetch.sub_item_table_func() or {}
-expect(#prefetch_items == 3, "chapter prefetch contains its two related preferences")
-expect(prefetch_items[1] and prefetch_items[1].text
-        == "Automatically prefetch next chapter",
-    "automatic prefetch is the parent switch")
-expect(prefetch_items[2] and not prefetch_items[2].enabled_func(),
+local function prefetch_item(text)
+    for _i, item in ipairs(prefetch_items) do
+        if item.text == text then return item end
+    end
+end
+local auto_toggle = prefetch_item("Automatically prefetch next chapter")
+local ahead_item = prefetch_item("Prefetch ahead")
+local annotation_item = prefetch_item("Prefetch underlines and thoughts")
+local notifications_item = prefetch_item("Show prefetch notifications")
+expect(#prefetch_items == 4, "chapter prefetch contains switch, window, annotations, and notifications")
+expect(auto_toggle ~= nil, "automatic prefetch is the parent switch")
+expect(ahead_item ~= nil and not ahead_item.enabled_func(),
+    "prefetch window is disabled while automatic prefetch is off")
+expect(annotation_item ~= nil and not annotation_item.enabled_func(),
     "annotation prefetch is disabled while automatic prefetch is off")
-expect(prefetch_items[2] and prefetch_items[2].text
-        == "Prefetch underlines and thoughts",
+expect(annotation_item.text == "Prefetch underlines and thoughts",
     "annotation prefetch uses the short label")
-expect(prefetch_items[3] and not prefetch_items[3].enabled_func(),
+expect(notifications_item ~= nil and not notifications_item.enabled_func(),
     "notification setting is disabled while automatic prefetch is off")
 
 local menu_updates = 0
-prefetch_items[1].callback({
+auto_toggle.callback({
     updateItems = function() menu_updates = menu_updates + 1 end,
 })
 expect(cache.auto_prefetch_next_chapter == false and shown_widget ~= nil,
@@ -365,20 +388,33 @@ shown_widget.ok_callback()
 expect(cache.auto_prefetch_next_chapter == true and menu_updates == 1,
     "automatic prefetch is enabled only after confirmation")
 
-expect(prefetch_items[2].enabled_func() and not prefetch_items[2].checked_func(),
+-- Prefetch window submenu offers 1/5/10/20/50 and persists the choice.
+local ahead_items = ahead_item.sub_item_table_func()
+expect(#ahead_items == 5, "prefetch window offers five depth choices")
+expect(ahead_items[1].text_func() == "Next chapter only",
+    "depth one is labelled as next-chapter-only")
+expect(ahead_items[2].text_func() == "Next 5 chapters",
+    "depth five label includes the count")
+expect(ahead_items[1].checked_func() and not ahead_items[2].checked_func(),
+    "depth one is checked by default")
+ahead_items[3].callback({ updateItems = function() menu_updates = menu_updates + 1 end })
+expect(cache.prefetch_next_chapter_count == 10 and menu_updates == 2,
+    "choosing a window depth persists it and refreshes the menu")
+
+expect(annotation_item.enabled_func() and not annotation_item.checked_func(),
     "annotation prefetch is available and defaults to off")
-prefetch_items[2].callback({
+annotation_item.callback({
     updateItems = function() menu_updates = menu_updates + 1 end,
 })
 expect(shown_widget.text:find("adds extra requests", 1, true),
     "enabling annotation prefetch explains the extra work")
 shown_widget.ok_callback()
-expect(cache.prefetch_annotations == true and menu_updates == 2,
+expect(cache.prefetch_annotations == true and menu_updates == 3,
     "annotation prefetch is enabled and refreshes the menu")
-expect(prefetch_items[3].enabled_func(),
+expect(notifications_item.enabled_func(),
     "notification setting is enabled while automatic prefetch is on")
 
-prefetch_items[1].callback({ updateItems = function() end })
+auto_toggle.callback({ updateItems = function() end })
 expect(not cache.auto_prefetch_next_chapter and cache.prefetch_annotations
         and prefetch_cancellations == 1,
     "disabling chapter prefetch cancels annotations while retaining the child preference")
@@ -397,13 +433,13 @@ local popup_items = popup_settings_item and popup_settings_item.sub_item_table_f
 expect(#popup_items == 6,
     "thought popup settings contain height, font size, contrast, position, width, and tap paging")
 expect(popup_items[1] and type(popup_items[1].text_func) == "function"
-        and popup_items[1].text_func() == "Position: %1",
+        and popup_items[1].text_func() == "Position: Center",
     "thought popup position entry is first")
 expect(popup_items[2] and type(popup_items[2].text_func) == "function"
-        and popup_items[2].text_func() == "Height: %1%",
+        and popup_items[2].text_func() == "Height: 70%",
     "thought popup height entry shows the current percentage")
 expect(popup_items[3] and type(popup_items[3].text_func) == "function"
-        and popup_items[3].text_func() == "Width: %1%",
+        and popup_items[3].text_func() == "Width: 80%",
     "thought popup width entry shows the current percentage")
 expect(popup_items[3] and popup_items[3].enabled_func(),
     "thought popup width is enabled for the default centered position")

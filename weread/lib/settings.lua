@@ -38,6 +38,9 @@ local defaults = {
         download_underlines_and_thoughts = false,
         prefetch_annotations = false,
         auto_prefetch_next_chapter = false,
+        -- How many chapters ahead of the current one the automatic prefetch
+        -- downloads once enabled (1..50).
+        prefetch_next_chapter_count = 1,
         show_prefetch_notifications = true,
         show_annotations = true,
         -- When true, taps in the left/right edge zones never open thought popups
@@ -187,6 +190,10 @@ function Settings:new()
     end
     if cache.auto_prefetch_next_chapter == nil then
         cache.auto_prefetch_next_chapter = false
+        cache_changed = true
+    end
+    if cache.prefetch_next_chapter_count == nil then
+        cache.prefetch_next_chapter_count = 1
         cache_changed = true
     end
     if cache.show_prefetch_notifications == nil then

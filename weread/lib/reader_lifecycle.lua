@@ -231,21 +231,52 @@ function M:maybePrefetchNextChapter(book_id)
         return false
     end
 
+    local depth = math.max(1, math.min(50,
+        tonumber(cache.prefetch_next_chapter_count) or 1))
     local next_uid = tostring(next_chapter.chapterUid or next_chapter.chapterId or "")
-    local cached = book.cached_chapters and book.cached_chapters[next_uid]
-    if file_exists(cached) then
+    local next_cached = book.cached_chapters
+        and book.cached_chapters[next_uid]
+        and file_exists(book.cached_chapters[next_uid])
+    if next_cached then
         if self.prefetchChapterAnnotations then self:prefetchChapterAnnotations(book, next_chapter) end
-        if not self.downloader:isPrefetching(book, next_chapter) then
+        if depth <= 1 then
+            if not self.downloader:isPrefetching(book, next_chapter) then
+                self.downloader:cancelPrefetch("next_chapter_cached")
+            end
+            return true
+        end
+    elseif self.downloader:isPrefetching(book, next_chapter) then
+        return true
+    end
+
+    -- With a prefetch window deeper than one chapter, walk forward to the
+    -- first chapter inside the window that is neither cached nor downloading.
+    local target_chapter, target_uid
+    if not next_cached or depth > 1 then
+        local window_end = math.min(#chapters, current_index + depth)
+        for index = current_index + 1, window_end do
+            local candidate = chapters[index]
+            local uid = tostring(candidate.chapterUid or candidate.chapterId or "")
+            local cached_path = book.cached_chapters and book.cached_chapters[uid]
+            if not file_exists(cached_path) then
+                target_chapter, target_uid = candidate, uid
+                break
+            end
+        end
+    end
+    if not target_chapter then
+        if not next_cached and not self.downloader:isPrefetching(book, next_chapter) then
             self.downloader:cancelPrefetch("next_chapter_cached")
         end
         return true
     end
-    if self.downloader:isPrefetching(book, next_chapter) then
+    if self.downloader:isPrefetching(book, target_chapter) then
         return true
     end
 
-    local title = next_chapter.title or T(_("Chapter %1"), next_uid)
-    return self.downloader:start(book, { next_chapter }, "chapter", {
+    local session_gen = self._reader_session_gen
+    local title = target_chapter.title or T(_("Chapter %1"), target_uid)
+    return self.downloader:start(book, { target_chapter }, "chapter", {
         single_chapter = true,
         include_annotations = false,
         prefetch = true,
@@ -255,7 +286,7 @@ function M:maybePrefetchNextChapter(book_id)
         on_start = function()
             logger.info("started:",
                 "book_id=", tostring(book_id),
-                "chapter_uid=", next_uid,
+                "chapter_uid=", target_uid,
                 "title=", title)
             self:showPrefetchNotice(
                 T(_("Prefetching next chapter: %1"), title), 0.5)
@@ -268,18 +299,35 @@ function M:maybePrefetchNextChapter(book_id)
                 -- do not fork an annotation worker only to cancel it during
                 -- the document switch.
                 if self.prefetchChapterAnnotations
-                    and not self.downloader:isPromotedPrefetch(book, next_chapter) then
-                    self:prefetchChapterAnnotations(book, next_chapter)
+                    and not self.downloader:isPromotedPrefetch(book, target_chapter) then
+                    self:prefetchChapterAnnotations(book, target_chapter)
                 end
                 logger.info("succeeded:",
                     "book_id=", tostring(book_id),
-                    "chapter_uid=", next_uid,
+                    "chapter_uid=", target_uid,
                     "title=", title)
                 self:showPrefetchNotice(T(_("Next chapter prefetched: %1"), title))
+                -- Continue the prefetch window while the same reading session
+                -- is still open and the depth preference still wants more than
+                -- one chapter. A closed document cancels the active job, so
+                -- a cancelled completion never reaches this branch.
+                local chain_cache = self.settings:get("cache")
+                local chain_depth = math.max(1, math.min(50,
+                    tonumber(chain_cache.prefetch_next_chapter_count) or 1))
+                if chain_depth > 1
+                    and chain_cache.auto_prefetch_next_chapter == true
+                    and self._reader_session_gen == session_gen
+                    and self.ui.document and self.ui.document.file == file then
+                    UIManager:scheduleIn(0.1, function()
+                        if self._reader_session_gen == session_gen then
+                            self:maybePrefetchNextChapter(book_id)
+                        end
+                    end)
+                end
                 return
             end
             local retry_requested = self.downloader:isPromotedPrefetch(
-                book, next_chapter)
+                book, target_chapter)
             if value == "cancelled" or value == "document_closed"
                 or value == "replaced" or value == "manual_download"
                 or value == "setting_disabled" or value == "prefetch_not_applicable"
@@ -287,7 +335,7 @@ function M:maybePrefetchNextChapter(book_id)
                 or value == "next_chapter_cached" then
                 logger.info("ended without completion:",
                     "book_id=", tostring(book_id),
-                    "chapter_uid=", next_uid,
+                    "chapter_uid=", target_uid,
                     "title=", title,
                     "reason=", tostring(value))
                 return
@@ -299,7 +347,7 @@ function M:maybePrefetchNextChapter(book_id)
                 or display_error(value)
             logger.warn("failed:",
                 "book_id=", tostring(book_id),
-                "chapter_uid=", next_uid,
+                "chapter_uid=", target_uid,
                 "title=", title,
                 "reason=", log_error(value))
             self:showPrefetchNotice(T(_("Next chapter prefetch failed: %1"), reason))
@@ -310,7 +358,7 @@ function M:maybePrefetchNextChapter(book_id)
                     and 0.1 or 1.1
                 UIManager:scheduleIn(retry_delay, function()
                     if self.ui.document and self.ui.document.file == source_file then
-                        self:downloadChapterAndRead(book, next_chapter)
+                        self:downloadChapterAndRead(book, target_chapter)
                     end
                 end)
             end

@@ -4,6 +4,7 @@ package.path = "./?.lua;" .. package.path
 
 local existing = {}
 local logs = {}
+local schedules = {}
 package.preload["weread.lib.content"] = function()
     return {
         catalog_cache_path = function() return "/cache/catalog.json" end,
@@ -24,7 +25,9 @@ package.preload["weread.lib.protocol"] = function()
     return { is_mp_book = function(book_id) return book_id == "mp-book" end }
 end
 package.preload["ui/uimanager"] = function()
-    return { scheduleIn = function() end }
+    return { scheduleIn = function(_self, delay, callback)
+        schedules[#schedules + 1] = { delay = delay, callback = callback }
+    end }
 end
 package.preload["weread.lib.plugin_util"] = function()
     return {
@@ -145,6 +148,49 @@ expect(starts[1].options.start_delay == 0.1,
 starts[1].options.on_start()
 starts[1].options.on_complete(false, "network error")
 expect(#notices == 1, "notification setting silences all prefetch notices")
+
+-- Deeper prefetch windows: with a depth of N the lifecycle keeps calling
+-- itself after each success until every uncached chapter inside the window
+-- is cached.
+cache.prefetch_next_chapter_count = 5
+cache.show_prefetch_notifications = true
+book.cached_chapters["2"] = "/cache/two.epub"
+existing["/cache/two.epub"] = true
+starts = {}
+expect(host:maybePrefetchNextChapter("book"),
+    "cached next chapter with deeper window still scans forward")
+expect(#starts == 1 and starts[1].chapters[1] == chapters[3],
+    "window of five skips cached chapter two and downloads chapter three")
+starts[1].options.on_complete(true, "/cache/three.epub")
+expect(#schedules == 1, "successful window download schedules the next link")
+existing["/cache/three.epub"] = true
+book.cached_chapters["3"] = "/cache/three.epub"
+starts = {}
+schedules[1].callback()
+expect(#starts == 0 and #schedules == 1,
+    "window end (three of three chapters) starts no further download")
+
+book.cached_chapters["2"] = nil
+existing["/cache/two.epub"] = nil
+book.cached_chapters["3"] = nil
+existing["/cache/three.epub"] = nil
+starts = {}
+schedules = {}
+cache.prefetch_next_chapter_count = 1
+expect(host:maybePrefetchNextChapter("book"), "depth one still prefetches")
+expect(starts[1].chapters[1] == chapters[2],
+    "depth one downloads only the immediate next chapter")
+starts[1].options.on_complete(true, "/cache/two.epub")
+expect(#schedules == 0,
+    "depth one does not chain into the following chapter")
+cache.prefetch_next_chapter_count = 5
+
+-- A failed window link stops the chain instead of hammering the network.
+starts = {}
+schedules = {}
+expect(host:maybePrefetchNextChapter("book"), "window retry accepted")
+starts[1].options.on_complete(false, "offline")
+expect(#schedules == 0, "failed prefetch does not continue the window")
 
 local legacy_single = {
     cached_file = "/cache/one.epub",
