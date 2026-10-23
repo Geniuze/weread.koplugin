@@ -21,9 +21,11 @@ package.preload["ui/uimanager"] = function()
         scheduleIn = function(_self, _delay, callback) callback() end,
     }
 end
+local network_state = { connected = false, online = false }
 package.preload["ui/network/manager"] = function()
     return {
-        isOnline = function() return false end,
+        isOnline = function() return network_state.online end,
+        isConnected = function() return network_state.connected end,
     }
 end
 package.preload["weread.lib.logger"] = function()
@@ -47,6 +49,7 @@ local host = setmetatable({
     end,
 }, { __index = Common })
 
+-- Offline (no link): the task must not start.
 eq(host:runOnlineTask("automatic", function() end, nil, {
     silent_offline = true,
 }), false, "silent offline task does not start")
@@ -55,5 +58,16 @@ eq(offline_notices, 0, "silent offline task does not show a notice")
 eq(host:runOnlineTask("manual", function() end), false,
     "regular offline task does not start")
 eq(offline_notices, 1, "regular offline task still shows a notice")
+
+-- Link connected but DNS broken (isOnline false, isConnected true): the old
+-- gate blocked the UI thread on DNS resolution. The task must start; the
+-- broken DNS then surfaces inside the request with a bounded timeout.
+network_state.connected = true
+offline_notices = 0
+local ran = false
+eq(host:runOnlineTask("dns-broken", function() ran = true end), true,
+    "link-connected task with broken DNS must not be gated")
+eq(ran, true, "link-connected task did not run")
+eq(offline_notices, 0, "link-connected task showed an offline notice")
 
 print(string.format("common_network_spec: %d checks", checks))

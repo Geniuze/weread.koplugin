@@ -11,6 +11,12 @@ if not ok_json then
 end
 
 local DEFAULT_TIMEOUT_SECONDS = 15
+-- Cap the whole request (connect + headers + body). Without it a connection
+-- trickling one byte per block window (each under the per-recv block timeout)
+-- would never fail, and a chapter download could stall indefinitely on an
+-- unstable network. socketutil disables its sink clock when total_timeout < 0,
+-- so -1 must never reach it.
+local DEFAULT_TOTAL_TIMEOUT_SECONDS = 300
 local Client = {}
 Client.__index = Client
 
@@ -134,6 +140,22 @@ local function merge_req_opts(default_opts, user_opts)
     return result
 end
 
+-- Enforce the total request budget on caller-supplied sinks. Mirrors
+-- socketutil.table_sink's clock: the budget starts when the first chunk
+-- arrives, so connect time does not consume body-transfer time. A `nil`
+-- chunk is the ltn12 end-of-stream signal and passes through untouched.
+local function wrap_sink_with_total_timeout(sink, total_timeout)
+    local start_ts
+    return function(chunk, err)
+        if chunk and not start_ts then
+            start_ts = os.time()
+        elseif chunk and os.time() - start_ts > total_timeout then
+            return nil, socketutil.SINK_TIMEOUT_CODE
+        end
+        return sink(chunk, err)
+    end
+end
+
 local function is_weread_url(url)
     local authority = tostring(url or ""):match("^https?://([^/]+)")
     if not authority then
@@ -245,12 +267,22 @@ function Client:request(opts)
         headers["Content-Length"] = tostring(#body)
     end
     local block_timeout = DEFAULT_TIMEOUT_SECONDS
-    local total_timeout = -1
+    local total_timeout = DEFAULT_TOTAL_TIMEOUT_SECONDS
     if type(opts.timeout) == "table" and opts.timeout[1] then
         block_timeout = opts.timeout[1]
-        total_timeout = opts.timeout[2] or block_timeout
+        if type(opts.timeout[2]) == "number" then
+            total_timeout = opts.timeout[2]
+        elseif block_timeout > total_timeout then
+            -- A caller raising only the block timeout above the cap (e.g. a
+            -- slow-tar fetch) should not silently fall back under its own
+            -- block budget.
+            total_timeout = block_timeout
+        end
     elseif type(opts.timeout) == "number" then
         block_timeout = opts.timeout
+        if block_timeout > total_timeout then
+            total_timeout = block_timeout
+        end
     end
     socketutil:set_timeout(block_timeout, total_timeout)
 
@@ -258,6 +290,12 @@ function Client:request(opts)
     if not sink_to_use then
         response = {}
         sink_to_use = socketutil.table_sink(response)
+    elseif total_timeout >= 0 then
+        -- socketutil.table_sink already enforces total_timeout, but only for
+        -- the sink it builds itself. Callers passing their own sink (file
+        -- downloads) otherwise bypass the total budget, letting a trickle
+        -- connection extend a download forever.
+        sink_to_use = wrap_sink_with_total_timeout(sink_to_use, total_timeout)
     end
 
     local req_opts = merge_req_opts({
@@ -266,6 +304,10 @@ function Client:request(opts)
         sink = sink_to_use,
         headers = headers,
     }, opts)
+    -- merge_req_opts applies user_opts last, so opts.sink would overwrite the
+    -- (possibly wrapped) sink built above. Route everything through the
+    -- resolved sink instead.
+    req_opts.sink = sink_to_use
     -- Redirects are handled explicitly by request_follow so credentials can be
     -- rebuilt for every destination instead of being copied across origins.
     req_opts.redirect = false

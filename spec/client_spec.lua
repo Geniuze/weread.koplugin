@@ -42,6 +42,7 @@ package.preload["socketutil"] = function()
         reset_timeout = function()
             reset_count = reset_count + 1
         end,
+        SINK_TIMEOUT_CODE = "sink timeout",
         table_sink = function(target)
             return function(chunk)
                 if chunk then target[#target + 1] = chunk end
@@ -56,6 +57,18 @@ package.preload["socket.http"] = function()
             requests[#requests + 1] = options
             local response = table.remove(responses, 1)
             if response.raise then error(response.raise) end
+            if options.sink and response.trickle then
+                -- Simulate a stream that stays under the block timeout on
+                -- every chunk but exceeds the total budget midway: the sink
+                -- rejects the second chunk, and socket.try raises that out of
+                -- http.request, exactly like a real trickle connection.
+                options.sink("part-1")
+                local real_time = os.time
+                rawset(os, "time", function() return real_time() + 3600 end)
+                local accepted, reason = options.sink("part-2")
+                rawset(os, "time", real_time)
+                if not accepted then error(tostring(reason), 0) end
+            end
             if options.sink then options.sink(response.body or "") end
             return 1, response.code, response.headers or {}, response.status
         end,
@@ -134,6 +147,13 @@ responses[#responses + 1] = { body = "public", code = 200 }
 client:request({ url = "https://example.com/public" })
 expect(requests[2].headers.Cookie == nil,
     "WeRead cookie leaked to a non-WeRead host")
+expect(timeout_calls[2][1] == 15 and timeout_calls[2][2] == 300,
+    "requests without a timeout did not get the bounded default")
+
+responses[#responses + 1] = { body = "large", code = 200 }
+client:request({ url = "https://weread.qq.com/web/test", timeout = 400 })
+expect(timeout_calls[3][1] == 400 and timeout_calls[3][2] == 400,
+    "a raised block timeout did not lift the total budget")
 
 responses[#responses + 1] = { raise = "transport failed" }
 local ok, err = pcall(function()
@@ -141,7 +161,7 @@ local ok, err = pcall(function()
 end)
 expect(not ok and tostring(err):find("transport failed", 1, true),
     "transport error was not propagated")
-expect(reset_count == 3, "timeout was not reset after transport error")
+expect(reset_count == 4, "timeout was not reset after transport error")
 
 responses[#responses + 1] = {
     body = "",
@@ -379,5 +399,25 @@ ok = pcall(function()
 end)
 expect(not ok and io.open(download_path .. ".part", "rb") == nil,
     "oversized file download did not remove its partial output")
+
+-- A caller-supplied sink must still be capped by the total budget: a slow
+-- trickle that keeps every individual chunk under the block timeout used to
+-- run forever. download_to_file passes its own sink; the wrapper installed by
+-- request() must reject the chunk arriving after the budget, and that
+-- rejection must surface as a download failure.
+local guard_path = os.tmpname()
+os.remove(guard_path)
+responses[#responses + 1] = { body = "ignored", code = 200, trickle = true }
+local guard_ok, guard_err = pcall(function()
+    client:download_to_file(
+        "https://weread.qq.com/trickle", guard_path, { max_bytes = 1024 })
+end)
+os.remove(guard_path)
+os.remove(guard_path .. ".part")
+expect(not guard_ok and tostring(guard_err):find("sink timeout", 1, true),
+    "caller-supplied sink was not capped by the total budget")
+local trickle_call = timeout_calls[#timeout_calls]
+expect(trickle_call and trickle_call[2] == 300,
+    "file download did not use the bounded default total timeout")
 
 print(("client_spec: %d checks"):format(checks))

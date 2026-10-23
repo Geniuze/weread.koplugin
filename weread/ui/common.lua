@@ -124,7 +124,11 @@ function M:showOffline(label)
 end
 
 function M:runOnlineTask(label, callback, delay, options)
-    if not self:isNetworkOnline() then
+    -- Use the non-blocking link-state check, never the DNS-probing
+    -- isNetworkOnline(): a Wi-Fi link with broken DNS must not freeze the UI
+    -- thread inside socket.dns.toip for tens of seconds. Broken DNS now
+    -- surfaces as a request error with a bounded timeout instead.
+    if not self:isNetworkConnected() then
         if not (options and options.silent_offline) then
             self:showOffline(label)
         end
