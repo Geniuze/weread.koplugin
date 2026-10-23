@@ -88,6 +88,11 @@ local cache = {
     show_annotations = false,
 }
 local shelf = { sort_order = "time_desc" }
+local sync = {
+    pull_on_open = false,
+    upload_on_close = false,
+    ask_on_conflict = true,
+}
 local flush_count = 0
 local thought_popup = {
     height_ratio = 0.70,
@@ -109,11 +114,13 @@ local host = {
         get = function(_self, key, default)
             if key == "cache" then return cache end
             if key == "shelf" then return shelf end
+            if key == "sync" then return sync end
             if key == "thought_popup" then return thought_popup end
             return default
         end,
         set = function(_self, key, value)
             if key == "shelf" then shelf = value end
+            if key == "sync" then sync = value end
         end,
         flush = function() flush_count = flush_count + 1 end,
     },
@@ -214,6 +221,33 @@ local settings_items = host:getSettingsMenuItems()
 local bookshelf_view_item = settings_items[1]
 expect(bookshelf_view_item and bookshelf_view_item.text == "Bookshelf view",
     "bookshelf view preference is the first settings item")
+local menu_update_count = 0
+local progress_management_item
+for _i, item in ipairs(settings_items) do
+    if item.text == "Progress management" then
+        progress_management_item = item
+    end
+end
+local progress_items = progress_management_item
+    and progress_management_item.sub_item_table_func() or {}
+local auto_resolve_item
+for _i, item in ipairs(progress_items) do
+    if item.text == "Auto-resolve progress differences" then
+        auto_resolve_item = item
+    end
+end
+expect(auto_resolve_item ~= nil and not auto_resolve_item.checked_func(),
+    "auto-resolve defaults to asking on every difference")
+auto_resolve_item.callback({
+    updateItems = function() menu_update_count = menu_update_count + 1 end,
+})
+expect(sync.ask_on_conflict == false and flush_count > 0,
+    "auto-resolve toggle persists ask_on_conflict=false")
+expect(auto_resolve_item.checked_func(),
+    "auto-resolve reflects the persisted preference")
+auto_resolve_item.callback({ updateItems = function() end })
+expect(sync.ask_on_conflict == true,
+    "auto-resolve toggles back to asking")
 local view_items = bookshelf_view_item.sub_item_table_func()
 expect(view_items[1].text == "List view" and view_items[1].checked_func(),
     "bookshelf defaults to list view for legacy settings")
@@ -221,13 +255,15 @@ expect(view_items[2].text == "Cover view" and not view_items[2].checked_func(),
     "cover view is available without being enabled by default")
 expect(view_items[3].text == "List browsing",
     "list browsing preference is nested under bookshelf view")
-local menu_update_count = 0
+local flushes_after_auto_resolve = flush_count
+local updates_after_auto_resolve = menu_update_count
 view_items[2].callback({
     updateItems = function() menu_update_count = menu_update_count + 1 end,
 })
-expect(shelf.view_mode == "cover" and flush_count == 1,
+expect(shelf.view_mode == "cover" and flush_count == flushes_after_auto_resolve + 1,
     "cover view preference was enabled and persisted")
-expect(menu_update_count == 1 and view_items[2].checked_func(),
+expect(menu_update_count == updates_after_auto_resolve + 1
+        and view_items[2].checked_func(),
     "cover view preference refreshed the settings menu")
 expect(not view_items[3].enabled_func(),
     "list browsing preference is disabled in cover view")
@@ -240,14 +276,15 @@ expect(scroll_mode.text == "Continuous scrolling" and not scroll_mode.checked_fu
 scroll_mode.callback({
     updateItems = function() menu_update_count = menu_update_count + 1 end,
 })
-expect(shelf.paginated == false and flush_count == 2,
+expect(shelf.paginated == false
+        and flush_count == flushes_after_auto_resolve + 2,
     "continuous scrolling was enabled and persisted")
-expect(menu_update_count == 2,
+expect(menu_update_count == updates_after_auto_resolve + 2,
     "list browsing preference refreshed the settings menu")
 expect(scroll_mode.checked_func() and not page_mode.checked_func(),
     "list browsing choices preserve their selected setting")
 page_mode.callback({ updateItems = function() end })
-expect(shelf.paginated == true and flush_count == 3,
+expect(shelf.paginated == true and flush_count == flushes_after_auto_resolve + 3,
     "page mode was re-enabled and persisted")
 view_items[1].callback({ updateItems = function() end })
 expect(view_items[3].enabled_func(),

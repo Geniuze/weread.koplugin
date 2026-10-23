@@ -470,6 +470,27 @@ function ProgressSync:_resolve(local_position, remote, context, options)
     end
 
     local ask = self:_config().ask_on_conflict ~= false
+    if not ask and not remote.conflict then
+        -- Automatic mode: resolve without prompting. Cloud ahead → jump to
+        -- WeRead's position; local ahead/different chapter → trust the
+        -- device and upload. Source conflicts (the two WeRead endpoints
+        -- disagree with each other) still ask, because no side is "ahead".
+        if comparison == "remote_ahead" then
+            local ok, reason = self:_apply_remote(
+                remote, context, { manual = options.manual })
+            if not ok then
+                self.state = "error"
+                self.notify("jump_failed", { error = reason })
+            end
+        else
+            self:_keep_local(local_position, remote, {
+                manual = options.manual,
+                upload_now = true,
+                reason = "auto_resolve_local",
+            })
+        end
+        return
+    end
     if remote.conflict or ask then
         self.state = "awaiting_choice"
         local choice_generation = self.generation

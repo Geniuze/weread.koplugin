@@ -237,6 +237,68 @@ test("nearby progress within two percent is treated as aligned", function()
     eq(#f.choices, 0, "nearby position does not prompt")
 end)
 
+test("auto-resolve jumps when cloud is ahead without prompting", function()
+    local f = fixture({
+        bookId = "book",
+        progress = 50,
+        chapterUid = 33,
+        chapterIdx = 3,
+        chapterOffset = 100,
+        updateTime = 10,
+    })
+    f.values.sync.ask_on_conflict = false
+    f.sync:on_reader_ready()
+    f.drain()
+    eq(#f.choices, 0, "no dialog in automatic mode")
+    eq(#f.jumps, 1, "one automatic jump")
+    eq(f.jumps[1], 0.5, "jump applies the cloud fraction")
+    eq(f.sync:status().verified, true, "auto jump verifies the gate")
+end)
+
+test("auto-resolve uploads when local is ahead without prompting", function()
+    local f = fixture({
+        bookId = "book",
+        progress = 5,
+        chapterUid = 11,
+        chapterIdx = 1,
+        chapterOffset = 0,
+        updateTime = 10,
+    })
+    f.values.sync.ask_on_conflict = false
+    f.sync:on_reader_ready()
+    f.drain()
+    eq(#f.choices, 0, "no dialog in automatic mode")
+    eq(#f.jumps, 0, "device position is kept")
+    eq(#f.uploads, 1, "local position uploads immediately")
+    eq(f.uploads[1].percent, 25, "uploaded the live local snapshot")
+    eq(f.sync:status().verified, true, "auto keep verifies the gate")
+end)
+
+test("auto-resolve still asks when the two cloud sources disagree", function()
+    local f = fixture({
+        bookId = "book",
+        progress = 50,
+        chapterUid = 33,
+        chapterIdx = 3,
+        chapterOffset = 100,
+        updateTime = 10,
+    })
+    f.values.sync.ask_on_conflict = false
+    f.sync.client.get_progress = function()
+        return { book = {
+            bookId = "book",
+            progress = 10,
+            chapterUid = 11,
+            chapterIdx = 1,
+            chapterOffset = 10,
+            updateTime = 5,
+        } }
+    end
+    f.sync:on_reader_ready()
+    f.drain()
+    eq(#f.choices, 1, "source conflict still prompts in automatic mode")
+end)
+
 test("unresolved conflict blocks reports and local choice uploads", function()
     local f = fixture({
         bookId = "book",

@@ -380,6 +380,25 @@ function M:getSettingsMenuItems()
                                 end
                             end),
                     },
+                    {
+                        text = _("Auto-resolve progress differences"),
+                        keep_menu_open = true,
+                        check_callback_updates_menu = true,
+                        checked_func = function()
+                            return self.settings:get("sync").ask_on_conflict == false
+                        end,
+                        callback = self:safeCallback(_("Auto-resolve progress differences"),
+                            function(touchmenu_instance)
+                                local sync = self.settings:get("sync")
+                                sync.ask_on_conflict =
+                                    sync.ask_on_conflict == false and true or false
+                                self.settings:set("sync", sync)
+                                self.settings:flush()
+                                if touchmenu_instance then
+                                    touchmenu_instance:updateItems()
+                                end
+                            end),
+                    },
                 }
             end,
         },
