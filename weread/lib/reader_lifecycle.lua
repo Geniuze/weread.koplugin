@@ -70,7 +70,6 @@ function M:onWeReadSyncProgress()
 end
 
 function M:handleEndOfBook(status_self)
-    local action = G_reader_settings and G_reader_settings:readSetting("end_document_action") or "pop-up"
     local book_id = self:detectWeReadBook()
     if not book_id then
         return self._orig_onEndOfBook(status_self)
@@ -83,12 +82,12 @@ function M:handleEndOfBook(status_self)
     local current_idx, current_ch, is_full_book = self:getChapterInfoFromFile(book, file)
     local next_ch = (not is_full_book) and current_idx and book.chapters[current_idx + 1]
 
-    if action == "next_file" then
-        if next_ch then
-            self:openChapter(book, next_ch)
-        else
-            self:showInfo(_("You have reached the last chapter."))
-        end
+    -- A single-chapter file with a successor flows straight into the next
+    -- chapter: the quick menu would be a redundant confirmation step. Every
+    -- other case (full-book EPUB, last chapter, unknown position) still gets
+    -- the quick menu, which reports "last chapter" when there is no successor.
+    if not is_full_book and current_idx and next_ch then
+        self:openChapter(book, next_ch)
         return true
     end
 
