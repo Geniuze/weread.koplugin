@@ -104,6 +104,7 @@ local zh = {
     ["Later"] = "稍后",
     ["Sync progress now"] = "立即同步进度",
     ["Book details"] = "书籍详情",
+    ["Quick menu"] = "快捷菜单",
     ["Show underlines and thoughts"] = "显示划线和想法",
     ["Hide underlines and thoughts"] = "隐藏划线和想法",
     ["Underlines and thoughts shown"] = "已显示划线和想法",

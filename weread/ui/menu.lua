@@ -162,6 +162,14 @@ function M:getMainMenuItems()
     if self.ui.document then
         local book_id = self:detectWeReadBook()
         local reader_items = {}
+        reader_items[#reader_items + 1] = {
+            text = _("Quick menu"),
+            keep_menu_open = true,
+            enabled_func = function() return book_id ~= nil end,
+            callback = self:safeCallback(_("Quick menu"), function()
+                self:onShowWeReadQuickMenu()
+            end),
+        }
         if book_id ~= nil then
             if not WeRead.is_mp_book(book_id) then
                 reader_items[#reader_items + 1] = {
