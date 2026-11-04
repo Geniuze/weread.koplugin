@@ -419,14 +419,26 @@ end
 -- The catalog itself only changes when it is fetched or refreshed; re-writing
 -- it on every consumer (quick menu, chapter list, progress sync) costs a full
 -- SQLite rewrite of every chapter row on the UI thread.
+-- The gate is keyed by book_id, not by the book table: settings:get("books")
+-- rebuilds every book table on each call, so a table-identity key never hits
+-- and consumers like the quick menu re-ran the full heal on every open.
 local healed_catalogs = PluginUtil.catalog_healed
+
+local function heal_gate_key(book)
+    local book_id = book.book_id or book.bookId
+    if book_id == nil then return nil end
+    return tostring(book_id)
+end
 
 function M:ensureChaptersLoaded(book)
     if not book then return nil end
-    if healed_catalogs[book] then
+    local gate_key = heal_gate_key(book)
+    if gate_key and healed_catalogs[gate_key] then
         return type(book.chapters) == "table" and book.chapters or nil
     end
-    healed_catalogs[book] = true
+    if gate_key then
+        healed_catalogs[gate_key] = true
+    end
     if type(book.chapters) == "table" and #book.chapters > 0 then
         local book_id = book.book_id or book.bookId
         if self.library_db and book_id then

@@ -58,8 +58,9 @@ end
 -- One-heal-per-session gate shared by the chapter-catalog consumers. The
 -- catalog only changes when it is fetched or refreshed, and re-writing the
 -- full chapter snapshot to SQLite on every consumer call (quick menu, chapter
--- list) is a UI-thread stall on e-ink devices. Callers mark a book table here
--- after its first persistence pass; the weak key lets GC reclaim closed books.
-PluginUtil.catalog_healed = setmetatable({}, { __mode = "k" })
+-- list) is a UI-thread stall on e-ink devices. Keyed by tostring(book_id):
+-- settings:get("books") returns fresh book tables on every call, so a
+-- table-identity key would never hit and the heal would re-run each time.
+PluginUtil.catalog_healed = setmetatable({}, { __mode = "v" })
 
 return PluginUtil

@@ -1208,15 +1208,19 @@ function M:loadChapters(book, callback, force_refresh)
     if not force_refresh then
         -- Same one-heal-per-session gate as ensureChaptersLoaded: the catalog
         -- only changes when fetched, so skip the per-call persistence once
-        -- this book's catalog has already been healed.
-        if healed_catalogs[book] then
+        -- this book's catalog has already been healed. Keyed by book_id
+        -- (settings:get("books") returns fresh tables on every call).
+        local book_id = book.book_id or book.bookId
+        local gate_key = book_id and tostring(book_id) or nil
+        if gate_key and healed_catalogs[gate_key] then
             if type(book.chapters) == "table" and #book.chapters > 0 then
                 callback(book.chapters)
                 return
             end
         elseif type(book.chapters) == "table" and #book.chapters > 0 then
-            healed_catalogs[book] = true
-            local book_id = book.book_id or book.bookId
+            if gate_key then
+                healed_catalogs[gate_key] = true
+            end
             if self.library_db and book_id then
                 self.library_db:putChapters(book_id, book.chapters)
             end
@@ -1233,7 +1237,6 @@ function M:loadChapters(book, callback, force_refresh)
             callback(book.chapters)
             return
         end
-        local book_id = book.book_id or book.bookId
         local cached = self.library_db and self.library_db:getChapters(book_id) or nil
         if type(cached) == "table" and #cached > 0 then
             book.chapters = cached

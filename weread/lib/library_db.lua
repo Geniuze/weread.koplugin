@@ -261,6 +261,45 @@ function LibraryDB:putChapters(book_id, chapters)
     if not book_id or type(chapters) ~= "table" then return false end
     local db = self:open()
     if not db then return false end
+
+    -- Idempotence guard: the catalog only changes when fetched or refreshed,
+    -- but stale callers (catalog self-healing on the quick-menu path) may pass
+    -- the same snapshot repeatedly. Comparing stored payloads first skips the
+    -- DELETE+every-row-INSERT+WAL fsync when nothing changed — a visible
+    -- UI-thread stall on e-ink devices.
+    local unchanged = false
+    local check_stmt
+    local check_ok = pcall(function()
+        check_stmt = db:prepare([[
+            SELECT chapter_uid, payload FROM chapters WHERE book_id=? ORDER BY position
+        ]])
+        check_stmt:reset():bind(tostring(book_id))
+        unchanged = true
+        for position, chapter in ipairs(chapters) do
+            local row = check_stmt:step()
+            if row == nil then
+                unchanged = false -- stored catalog shorter than snapshot
+                break
+            end
+            local uid = tostring(chapter.chapterUid or chapter.chapterId or position)
+            local payload = encode(chapter)
+            if payload == nil
+                or tostring(row[1]) ~= uid
+                or row[2] ~= payload then
+                unchanged = false
+                break
+            end
+        end
+        if unchanged and check_stmt:step() ~= nil then
+            unchanged = false -- stored catalog longer than snapshot
+        end
+    end)
+    close_statement(check_stmt)
+    if check_ok and unchanged then
+        pcall(function() db:close() end)
+        return true
+    end
+
     local transaction_open = false
     local stmt
     local ok, err = pcall(function()
