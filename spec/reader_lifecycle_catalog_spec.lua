@@ -140,7 +140,9 @@ expect(saved_chapters == repeat_book.chapters or repeat_saves >= 0,
 
 -- The quick menu reloads the books table on every open, so each consumer call
 -- sees a brand-new book table for the same book_id. The heal gate is keyed by
--- book_id: the second table identity must not re-run the SQLite rewrite.
+-- book_id: the second table identity must not re-run the SQLite rewrite, and
+-- the memoized catalog must rehydrate the fresh table so chapter navigation
+-- ("next chapter" row) keeps working after the gate hit.
 reset()
 local fresh_puts = 0
 host.library_db = {
@@ -154,11 +156,32 @@ local first_table = { book_id = "book-42", chapters = { { chapterUid = 10 } } }
 expect(host:ensureChaptersLoaded(first_table) == first_table.chapters,
     "fresh-table heal returns the first table's catalog")
 expect(fresh_puts == 1, "first fresh-table load heals SQLite once")
-local second_table = { book_id = "book-42", chapters = { { chapterUid = 10 } } }
-expect(host:ensureChaptersLoaded(second_table) == second_table.chapters,
-    "second fresh-table load still returns the catalog")
+local second_table = { book_id = "book-42" }
+local healed_chapters = host:ensureChaptersLoaded(second_table)
+expect(healed_chapters ~= nil and #healed_chapters == 1
+        and healed_chapters[1].chapterUid == 10,
+    "gate hit rehydrates the fresh table's catalog")
+expect(second_table.chapters == healed_chapters,
+    "gate hit attaches the memoized catalog to the fresh table")
 expect(fresh_puts == 1,
     "same book_id through a new table identity does not rewrite SQLite")
+
+-- A book whose heal found no catalog must not block later loads forever, but
+-- also must not retry the I/O on every consumer call within the session.
+reset()
+loaded_chapters = nil
+host.library_db = {
+    getChapters = function() return nil end,
+    putChapters = function() return true end,
+}
+local empty_first = { book_id = "book-empty" }
+expect(host:ensureChaptersLoaded(empty_first) == nil,
+    "book without any catalog returns nil")
+local empty_second = { book_id = "book-empty" }
+expect(host:ensureChaptersLoaded(empty_second) == nil,
+    "empty-catalog gate hit returns nil for a fresh table")
+expect(loaded_chapters == nil,
+    "empty-catalog gate hit does not re-read catalog.json")
 
 reset()
 save_ok, save_err = false, "disk full"

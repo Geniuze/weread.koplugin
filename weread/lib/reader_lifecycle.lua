@@ -422,6 +422,8 @@ end
 -- The gate is keyed by book_id, not by the book table: settings:get("books")
 -- rebuilds every book table on each call, so a table-identity key never hits
 -- and consumers like the quick menu re-ran the full heal on every open.
+-- The gate value memoizes the healed chapters table (true = no catalog), so a
+-- fresh book table is rehydrated on gate hit without any I/O.
 local healed_catalogs = PluginUtil.catalog_healed
 
 local function heal_gate_key(book)
@@ -434,13 +436,23 @@ function M:ensureChaptersLoaded(book)
     if not book then return nil end
     local gate_key = heal_gate_key(book)
     if gate_key and healed_catalogs[gate_key] then
-        return type(book.chapters) == "table" and book.chapters or nil
+        local healed = healed_catalogs[gate_key]
+        if healed == true then
+            -- Heal ran and found no catalog; do not retry this session.
+            return type(book.chapters) == "table" and book.chapters or nil
+        end
+        -- Memoized chapters table: rehydrate the fresh settings book table
+        -- without any I/O so navigation sees the catalog again.
+        if type(book.chapters) ~= "table" then
+            book.chapters = healed
+        end
+        return book.chapters
     end
-    if gate_key then
-        healed_catalogs[gate_key] = true
-    end
+    local book_id = book.book_id or book.bookId
     if type(book.chapters) == "table" and #book.chapters > 0 then
-        local book_id = book.book_id or book.bookId
+        if gate_key then
+            healed_catalogs[gate_key] = book.chapters
+        end
         if self.library_db and book_id then
             self.library_db:putChapters(book_id, book.chapters)
         end
@@ -456,10 +468,12 @@ function M:ensureChaptersLoaded(book)
         return book.chapters
     end
 
-    local book_id = book.book_id or book.bookId
     local chapters = Content.load_catalog_cache(
         self.client, self.settings, book)
     if type(chapters) == "table" and #chapters > 0 then
+        if gate_key then
+            healed_catalogs[gate_key] = chapters
+        end
         if self.library_db then
             self.library_db:putChapters(book_id, chapters)
         end
@@ -469,6 +483,9 @@ function M:ensureChaptersLoaded(book)
     chapters = self.library_db and self.library_db:getChapters(book_id) or nil
     if type(chapters) == "table" and #chapters > 0 then
         book.chapters = chapters
+        if gate_key then
+            healed_catalogs[gate_key] = chapters
+        end
         local cache_ok, cache_err = Content.save_catalog_cache(
             self.client, self.settings, book, chapters)
         if not cache_ok then
@@ -476,6 +493,9 @@ function M:ensureChaptersLoaded(book)
                 log_error(cache_err))
         end
         return chapters
+    end
+    if gate_key then
+        healed_catalogs[gate_key] = true
     end
     return nil
 end

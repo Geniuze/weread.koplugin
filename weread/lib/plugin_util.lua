@@ -61,6 +61,8 @@ end
 -- list) is a UI-thread stall on e-ink devices. Keyed by tostring(book_id):
 -- settings:get("books") returns fresh book tables on every call, so a
 -- table-identity key would never hit and the heal would re-run each time.
+-- The value memoizes the healed chapters table (true when no catalog was
+-- found) so consumers can rehydrate a fresh book table without any I/O.
 PluginUtil.catalog_healed = setmetatable({}, { __mode = "v" })
 
 return PluginUtil

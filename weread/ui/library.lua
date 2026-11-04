@@ -1209,17 +1209,23 @@ function M:loadChapters(book, callback, force_refresh)
         -- Same one-heal-per-session gate as ensureChaptersLoaded: the catalog
         -- only changes when fetched, so skip the per-call persistence once
         -- this book's catalog has already been healed. Keyed by book_id
-        -- (settings:get("books") returns fresh tables on every call).
+        -- (settings:get("books") returns fresh book tables on every call);
+        -- the value memoizes the healed chapters table so a fresh settings
+        -- book table gets rehydrated without any I/O.
         local book_id = book.book_id or book.bookId
         local gate_key = book_id and tostring(book_id) or nil
-        if gate_key and healed_catalogs[gate_key] then
+        local healed = gate_key and healed_catalogs[gate_key] or nil
+        if healed ~= nil then
+            if healed ~= true and type(book.chapters) ~= "table" then
+                book.chapters = healed
+            end
             if type(book.chapters) == "table" and #book.chapters > 0 then
                 callback(book.chapters)
                 return
             end
         elseif type(book.chapters) == "table" and #book.chapters > 0 then
             if gate_key then
-                healed_catalogs[gate_key] = true
+                healed_catalogs[gate_key] = book.chapters
             end
             if self.library_db and book_id then
                 self.library_db:putChapters(book_id, book.chapters)
@@ -1240,6 +1246,9 @@ function M:loadChapters(book, callback, force_refresh)
         local cached = self.library_db and self.library_db:getChapters(book_id) or nil
         if type(cached) == "table" and #cached > 0 then
             book.chapters = cached
+            if gate_key then
+                healed_catalogs[gate_key] = cached
+            end
             local catalog_path = Content.catalog_cache_path(
                 self.settings, book)
             if catalog_path and not file_exists(catalog_path) then
@@ -1252,8 +1261,13 @@ function M:loadChapters(book, callback, force_refresh)
             end
         else
             cached = Content.load_catalog_cache(self.client, self.settings, book)
-            if type(cached) == "table" and #cached > 0 and self.library_db then
-                self.library_db:putChapters(book_id, cached)
+            if type(cached) == "table" and #cached > 0 then
+                if gate_key then
+                    healed_catalogs[gate_key] = cached
+                end
+                if self.library_db then
+                    self.library_db:putChapters(book_id, cached)
+                end
             end
         end
         if type(cached) == "table" and #cached > 0 then
