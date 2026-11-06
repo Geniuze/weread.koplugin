@@ -84,6 +84,79 @@ expect(release.version == "0.7.0" and release.archive_size == 1234,
 expect(release.notes:find("Added updates", 1, true) ~= nil,
     "release notes were not normalized")
 
+-- Dated package names (weread.koplugin-vX.Y.Z-YYYYMMDD.zip) are the release
+-- default since the filename carries the build date.
+local PREFIX = "https://github.com/finlater/weread.koplugin/releases/download/v0.7.0/"
+local function parse_assets(assets)
+    return Updater.parse_release{
+        tag_name = "v0.7.0", draft = false, prerelease = false,
+        html_url = "https://github.com/finlater/weread.koplugin/releases/tag/v0.7.0",
+        assets = assets,
+    }
+end
+
+local dated, dated_err = parse_assets{
+    {
+        name = "weread.koplugin-v0.7.0-20261106.zip",
+        browser_download_url = PREFIX .. "weread.koplugin-v0.7.0-20261106.zip",
+        size = 2048,
+    },
+    {
+        name = "weread.koplugin-v0.7.0-20261106.zip.sha256",
+        browser_download_url = PREFIX .. "weread.koplugin-v0.7.0-20261106.zip.sha256",
+    },
+}
+expect(dated ~= nil and dated_err == nil, "dated release was rejected")
+expect(dated.archive_url == PREFIX .. "weread.koplugin-v0.7.0-20261106.zip"
+    and dated.archive_size == 2048, "dated archive URL or size was wrong")
+
+local newest = parse_assets{
+    {
+        name = "weread.koplugin-v0.7.0-20261101.zip",
+        browser_download_url = PREFIX .. "weread.koplugin-v0.7.0-20261101.zip",
+        size = 1,
+    },
+    {
+        name = "weread.koplugin-v0.7.0-20261101.zip.sha256",
+        browser_download_url = PREFIX .. "weread.koplugin-v0.7.0-20261101.zip.sha256",
+    },
+    {
+        name = "weread.koplugin-v0.7.0-20261106.zip",
+        browser_download_url = PREFIX .. "weread.koplugin-v0.7.0-20261106.zip",
+        size = 2,
+    },
+    {
+        name = "weread.koplugin-v0.7.0-20261106.zip.sha256",
+        browser_download_url = PREFIX .. "weread.koplugin-v0.7.0-20261106.zip.sha256",
+    },
+}
+expect(newest ~= nil and newest.archive_url:find("20261106", 1, true) ~= nil,
+    "newest dated package should win")
+
+local legacy_mix = parse_assets{
+    {
+        name = "weread.koplugin-v0.7.0.zip",
+        browser_download_url = PREFIX .. "weread.koplugin-v0.7.0.zip",
+        size = 3,
+    },
+    {
+        name = "weread.koplugin-v0.7.0.zip.sha256",
+        browser_download_url = PREFIX .. "weread.koplugin-v0.7.0.zip.sha256",
+    },
+}
+expect(legacy_mix ~= nil
+    and legacy_mix.archive_url == PREFIX .. "weread.koplugin-v0.7.0.zip",
+    "legacy undated package should still be accepted")
+
+local checksum_missing = parse_assets{
+    {
+        name = "weread.koplugin-v0.7.0-20261106.zip",
+        browser_download_url = PREFIX .. "weread.koplugin-v0.7.0-20261106.zip",
+        size = 4,
+    },
+}
+expect(checksum_missing == nil, "dated package without checksum should be rejected")
+
 local function parse_notes(notes)
     return assert(Updater.parse_release{
         tag_name = "v0.7.0", body = notes,

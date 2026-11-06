@@ -32,8 +32,9 @@ pushing the release commit; a version bump on `main` can trigger publication.
 bash scripts/package_release.sh
 ```
 
-The default output is `dist/weread.koplugin-vX.Y.Z.zip`, where `X.Y.Z` comes
-from `_meta.lua`. A custom output path may be passed as the first argument.
+The default output is `dist/weread.koplugin-vX.Y.Z-YYYYMMDD.zip`, where `X.Y.Z`
+comes from `_meta.lua` and `YYYYMMDD` is the build date in UTC. A custom output
+path may be passed as the first argument.
 
 ## Manual GitHub package / 手动打包
 
@@ -67,8 +68,9 @@ To publish a release:
 Pushes that keep an existing version do not publish anything. Reusing an
 existing release tag fails deliberately; bump to a new version instead.
 Automatic packages use the versioned filename
-`weread.koplugin-vX.Y.Z.zip`. The zip and its `.sha256` checksum are separate
-workflow artifacts and separate GitHub Release assets.
+`weread.koplugin-vX.Y.Z-YYYYMMDD.zip` (build date in UTC). The zip and its
+`.sha256` checksum are separate workflow artifacts and separate GitHub Release
+assets.
 
 The workflow extracts the matching version section from `CHANGELOG.md`, adds
 the `## 新功能与改进` heading, and passes it to `gh release create --notes`.

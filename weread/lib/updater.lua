@@ -168,7 +168,25 @@ function Updater.parse_release(data)
         and data.tag_name:match("^v(%d+%.%d+%.%d+)$") or nil
     if not version then return nil, "invalid release tag" end
 
-    local archive_name = "weread.koplugin-v" .. version .. ".zip"
+    -- Release packages are named weread.koplugin-vX.Y.Z-YYYYMMDD.zip (build
+    -- date in UTC); the checksum asset carries a .sha256 suffix. Prefer the
+    -- lexicographically newest date if several packages exist; fall back to
+    -- the legacy undated name from older releases.
+    local archive_name, archive_date
+    for _, asset in ipairs(data.assets or {}) do
+        local name = asset.name
+        local dated = name:match("^weread%.koplugin%-v" .. version:gsub("%.", "%%.")
+            .. "%-(%d%d%d%d%d%d%d%d)%.zip$")
+        local legacy = name == "weread.koplugin-v" .. version .. ".zip"
+        if dated and (not archive_date or not legacy and dated > archive_date) then
+            archive_name, archive_date = name, dated
+        elseif legacy and not archive_name then
+            archive_name = name
+        end
+    end
+    if not archive_name then
+        return nil, "release package or checksum is missing"
+    end
     local checksum_name = archive_name .. ".sha256"
     local archive_url, checksum_url, archive_size
     for _, asset in ipairs(data.assets or {}) do

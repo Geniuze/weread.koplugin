@@ -70,6 +70,10 @@ jobs:
             fi
           fi
 
+          if [[ "$automatic_release" == "true" ]]; then
+            package_label="$tag-$(date -u +%Y%m%d)"
+          fi
+
           echo "current=$current"
           echo "automatic_release=$automatic_release"
           echo "version=$current" >> "$GITHUB_OUTPUT"
