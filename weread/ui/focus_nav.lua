@@ -110,6 +110,41 @@ function M.scrollToFocused(view)
     end
 end
 
+-- Scroll the given layout row to the top of the scroll area before the view
+-- has ever been painted. Widget dimen.y values are not laid out yet (KOReader
+-- fills them during paintTo), and ScrollableContainer computes its scroll
+-- limits only in its first paintTo, so neither item.dimen nor _scrollBy can be
+-- used here: item.dimen.y reads as 0 and _scrollBy clamps against a
+-- not-yet-computed _max_scroll_offset of 0, silently scrolling nowhere.
+-- Sum the preceding rows' measured heights instead, and clamp against the
+-- content height so the list never overshoots its bottom.
+function M.scrollToRow(view, row_y)
+    local scroll = view._nav_scroll
+    if not scroll or not row_y or row_y < 1 or row_y > #view.layout then return end
+    if view._nav_outside_scroll[view.layout[row_y][1]] then return end
+    local offset = 0
+    for _i = 1, row_y - 1 do
+        local widget = view.layout[_i][1]
+        if not view._nav_outside_scroll[widget] and widget.dimen and widget.dimen.h then
+            offset = offset + widget.dimen.h
+        end
+    end
+    local area_h = scroll.dimen and scroll.dimen.h
+    if not area_h or area_h <= 0 then return end
+    local content_h = 0
+    for _i = 1, #view.layout do
+        local widget = view.layout[_i][1]
+        if not view._nav_outside_scroll[widget] and widget.dimen and widget.dimen.h then
+            content_h = content_h + widget.dimen.h
+        end
+    end
+    if content_h <= area_h then return end -- everything fits, nothing to scroll
+    if offset > content_h - area_h then
+        offset = content_h - area_h
+    end
+    scroll._scroll_offset_y = math.max(0, offset)
+end
+
 -- Show the cursor on non-touch devices only; on touch devices key navigation
 -- still works but the initial selection stays invisible.
 -- NOT_UNFOCUS is set so the initial placement never sends Unfocus to the

@@ -200,9 +200,11 @@ function ChapterListView:init()
         initial_row = self.current_index + 1
     end
     FocusNav.initialFocus(self, 1, initial_row)
-    -- Open at the current reading position: scroll the focused row to the
-    -- top of the scroll area (no-op when the list fits on one screen).
-    FocusNav.scrollFocusedToTop(self)
+    -- Open at the current reading position: scroll that chapter row to the
+    -- top of the scroll area before the first paint. Must use scrollToRow,
+    -- not scrollFocusedToTop: pre-paint dimen.y and the scroll container's
+    -- limits are still zero, which would silently scroll nowhere.
+    FocusNav.scrollToRow(self, initial_row)
     self[1] = FrameContainer:new{
         background = Blitbuffer.COLOR_WHITE,
         bordersize = 0, padding = 0, margin = 0,

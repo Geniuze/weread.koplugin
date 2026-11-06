@@ -252,6 +252,86 @@ expect(focus_flags[1].x == 1 and focus_flags[1].y == 2
     and focus_flags[1].flags == bit.bor(0, 1),
     "initialFocus asks FocusManager for the cursor position without unfocus")
 
+-- scrollToRow must work before the first paint, when widget dimen.y and the
+-- scroll container's max offset are still zero (KOReader lays out dimen.y in
+-- paintTo and ScrollableContainer computes its limits in initState). The
+-- offset therefore comes from the preceding rows' measured heights, not from
+-- dimen.y, and it is stored directly instead of via _scrollBy.
+local pre_view = { layout = {}, key_events = {} }
+local pre_scroll = {
+    dimen = { x = 0, y = 0, w = 300, h = 200 },
+    _scroll_offset_y = 0,
+    _scrollBy = function(_self, dx, dy)
+        scroll_calls[#scroll_calls + 1] = { dx = dx, dy = dy }
+    end,
+}
+local rows = {}
+for _i = 1, 20 do
+    rows[_i] = { { name = "row" .. _i, dimen = { x = 0, y = 0, w = 300, h = 30 } } }
+    pre_view.layout[_i] = rows[_i]
+end
+pre_view._nav_scroll = pre_scroll
+pre_view._nav_outside_scroll = {}
+
+-- Row 8 (1-based layout row): rows 1-7 measure 210px; area is 200px, content
+-- 600px, so no clamping at the bottom.
+FocusNav.scrollToRow(pre_view, 8)
+expect(pre_scroll._scroll_offset_y == 210,
+    "scrollToRow offsets by the measured heights of the preceding rows")
+expect(#scroll_calls == 0,
+    "scrollToRow never calls _scrollBy before the first paint")
+
+-- Deep row clamps at the content bottom so the tail stays filled
+FocusNav.scrollToRow(pre_view, 20)
+expect(pre_scroll._scroll_offset_y == 400,
+    "scrollToRow clamps the offset to content height minus area height")
+
+-- First row resets to the top
+FocusNav.scrollToRow(pre_view, 1)
+expect(pre_scroll._scroll_offset_y == 0,
+    "scrollToRow on the first row scrolls to the top")
+
+-- Short list that fits the area never scrolls (3 rows x 30 = 90 <= 200)
+pre_scroll._scroll_offset_y = 55
+pre_view.layout = {}
+for _i = 1, 3 do
+    pre_view.layout[_i] = { { name = "short" .. _i, dimen = { x = 0, y = 0, w = 300, h = 30 } } }
+end
+FocusNav.scrollToRow(pre_view, 2)
+expect(pre_scroll._scroll_offset_y == 55,
+    "scrollToRow is a no-op when the content fits the scroll area")
+
+-- Rows before the target that live outside the scroll area do not count.
+-- Content (30+30=60) exceeds the area (50): rows 2-3 sum 30, but only
+-- content-area = 10 is scrollable, so the offset clamps to 10.
+local mixed_scroll = {
+    dimen = { x = 0, y = 0, w = 300, h = 50 },
+    _scroll_offset_y = 0,
+    _scrollBy = function() end,
+}
+local mixed_view = {
+    layout = {
+        { { name = "toolbar", dimen = { x = 0, y = 0, w = 300, h = 40 } } },
+        { { name = "row1", dimen = { x = 0, y = 0, w = 300, h = 30 } } },
+        { { name = "row2", dimen = { x = 0, y = 0, w = 300, h = 30 } } },
+    },
+    key_events = {},
+    _nav_scroll = mixed_scroll,
+    _nav_outside_scroll = {},
+}
+mixed_view._nav_outside_scroll[mixed_view.layout[1][1]] = true
+FocusNav.scrollToRow(mixed_view, 3)
+expect(mixed_scroll._scroll_offset_y == 10,
+    "scrollToRow skips outside-scroll rows and clamps to the scrollable span")
+
+-- Out-of-range rows are ignored
+pre_scroll._scroll_offset_y = 7
+FocusNav.scrollToRow(pre_view, nil)
+FocusNav.scrollToRow(pre_view, 0)
+FocusNav.scrollToRow(pre_view, 21)
+expect(pre_scroll._scroll_offset_y == 7,
+    "scrollToRow ignores missing and out-of-range rows")
+
 print(string.format(
     "focus_nav_spec: %d checks, %d failure(s)", checks, failures))
 os.exit(failures == 0 and 0 or 1)
