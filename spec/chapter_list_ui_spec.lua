@@ -52,6 +52,12 @@ package.preload["weread.lib.plugin_util"] = function()
         file_exists = function(path) return existing_files[path] == true end,
     }
 end
+package.preload["weread.lib.i18n"] = function()
+    return {
+        tr = function(text) return text end,
+        is_zh = function() return false end,
+    }
+end
 
 G_reader_settings = {
     readSetting = function(_self, key)
@@ -119,8 +125,47 @@ local book = { bookId = "book-1", title = "Book", cached_chapters = {} }
 host:showChapterList(book)
 expect(catalog_view_data.title == "Book" and #catalog_view_data.chapters == 7,
     "chapter catalog view receives the title and all chapters")
+expect(catalog_view_data.current_index == nil,
+    "chapter catalog without any reading position opens at the top")
 expect(catalog_view_data.chapters[1].status == "100 words",
     "chapter catalog preserves the right-side word-count status")
+expect(type(catalog_view_callbacks.on_refresh) == "function"
+    and type(catalog_view_callbacks.on_select_download) == "function",
+    "chapter catalog keeps refresh and multi-download actions")
+catalog_view_callbacks.on_select(chapters[1])
+expect(opened_chapter == chapters[1], "chapter row opens the selected chapter")
+expect(type(single_chapter_refresh) == "function",
+    "chapter row passes a post-download refresh callback")
+
+host.progress_sync = {
+    current_book_id = "book-1",
+    local_position = { chapter_uid = 3 },
+}
+host:showChapterList(book)
+expect(catalog_view_data.current_index == 3,
+    "live progress-sync position selects the current chapter row")
+expect(catalog_view_data.chapters[3].status == "Reading",
+    "current chapter row shows the Reading status")
+expect(catalog_view_data.chapters[1].status == "100 words",
+    "non-current rows keep the word-count status")
+host.progress_sync = nil
+
+host:showChapterList({
+    bookId = "book-1", title = "Book", cached_chapters = {},
+    chapter_uid = 5,
+})
+expect(catalog_view_data.current_index == 5,
+    "persisted chapter uid selects the current chapter row")
+
+host:showChapterList({
+    bookId = "book-1", title = "Book", cached_chapters = {},
+    chapter_idx = 6,
+})
+expect(catalog_view_data.current_index == 6,
+    "chapter idx fallback selects the current chapter row")
+expect(catalog_view_data.chapters[6].title == "Chapter 6"
+    and catalog_view_data.chapters[6].status == "600 words",
+    "idx fallback matches the catalog's chapterIdx field")
 expect(type(catalog_view_callbacks.on_refresh) == "function"
     and type(catalog_view_callbacks.on_select_download) == "function",
     "chapter catalog keeps refresh and multi-download actions")

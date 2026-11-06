@@ -1328,6 +1328,18 @@ function M:showChapterList(book, on_close)
         -- Always rebuild from that persisted record instead of the snapshot
         -- captured when the chapter list was first opened.
         reloadBookCache()
+        -- Resolve the reading position's chapter so the view can open on it.
+        -- Priority: live progress-sync position, then the shelf record's
+        -- persisted chapter, then the record's legacy reading position.
+        local book_id = book.book_id or book.bookId
+        local position_chapter_uid = self.progress_sync
+            and self.progress_sync.current_book_id == tostring(book_id)
+            and self.progress_sync.local_position
+            and self.progress_sync.local_position.chapter_uid or nil
+        local current_uid = position_chapter_uid
+            or book.chapter_uid
+            or book.last_local_position and book.last_local_position.chapter_uid
+            or nil
         local rows = {}
         for _i, chapter in ipairs(chapters) do
             local chapter_uid = chapter.chapterUid or chapter.chapterId
@@ -1337,9 +1349,12 @@ function M:showChapterList(book, on_close)
                 book.cached_chapters[tostring(chapter_uid)] = nil
                 cached = nil
             end
+            local is_current = current_uid ~= nil
+                and tostring(chapter_uid) == tostring(current_uid)
             rows[#rows + 1] = {
                 title = chapter.title or T(_("Chapter %1"), tostring(chapter_uid)),
-                status = cached and _("Cached")
+                status = is_current and _("Reading")
+                    or cached and _("Cached")
                     or T(_("%1 words"), tostring(chapter.wordCount or 0)),
                 source = chapter,
             }
@@ -1350,10 +1365,30 @@ function M:showChapterList(book, on_close)
                 self._chapter_list_view = nil
             end
         end
+        -- Resolve the index of the reading position's chapter for the view.
+        local current_index
+        if current_uid ~= nil then
+            for _i, chapter in ipairs(chapters) do
+                if tostring(chapter.chapterUid or chapter.chapterId)
+                    == tostring(current_uid) then
+                    current_index = _i
+                    break
+                end
+            end
+        end
+        -- Legacy records store chapter_idx as the 1-based catalog position
+        -- (openBookForReading has the same semantics), not a chapterIdx field.
+        if current_index == nil and tonumber(book.chapter_idx) then
+            local chapter_idx = math.floor(tonumber(book.chapter_idx))
+            if chapter_idx >= 1 and chapter_idx <= #chapters then
+                current_index = chapter_idx
+            end
+        end
         local view
         view = ChapterListView.show({
             title = book.title or _("Chapter list"),
             chapters = rows,
+            current_index = current_index,
         }, {
             on_refresh = self:safeCallback(_("Refresh chapter list"), function()
                 self:loadChapters(book, function(refreshed_chapters)

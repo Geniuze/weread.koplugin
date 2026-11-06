@@ -751,6 +751,17 @@ end
 
 function ProgressSync:on_close_document()
     local position = self:capture_local() or self.local_position
+    -- Keep the shelf record usable offline: the chapter list opens from the
+    -- bookshelf without a live document, so it needs the last known chapter.
+    if position and position.book_id then
+        self:_persist(position.book_id, {
+            chapter_uid = position.chapter_uid,
+            chapter_idx = position.chapter_idx,
+            chapter_offset = position.chapter_offset,
+            progress = position.percent,
+            last_local_position = position,
+        })
+    end
     if position and self.verified
         and self:_config().upload_on_close == true then
         if not self.local_position
@@ -772,6 +783,15 @@ end
 function ProgressSync:on_suspend()
     self.suspended_at = self.now()
     local position = self:capture_local() or self.local_position
+    if position and position.book_id then
+        self:_persist(position.book_id, {
+            chapter_uid = position.chapter_uid,
+            chapter_idx = position.chapter_idx,
+            chapter_offset = position.chapter_offset,
+            progress = position.percent,
+            last_local_position = position,
+        })
+    end
     if position and self.local_position
         and not PositionMapper.same_position(position, self.local_position) then
         self.dirty = true

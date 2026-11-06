@@ -696,6 +696,55 @@ test("a fresh automatic pull replaces an older retry chain", function()
     eq(#f.queue, 1, "replacement chain remains active")
 end)
 
+-- The chapter list opens from the bookshelf without a live document, so the
+-- captured local position must reach the shelf record on close and suspend.
+test("document close persists the reading chapter into the shelf record", function()
+    local f = fixture()
+    f.values.sync.pull_on_open = false
+    f.sync:on_reader_ready()
+    f.drain()
+    f.document.page = 25
+    f.sync:on_close_document()
+    local book = f.values.books.book
+    eq(book.chapter_uid, 22, "close persists the current chapter uid")
+    eq(book.chapter_idx, 2, "close persists the current chapter idx")
+    eq(book.chapter_offset, 150, "close persists the chapter offset")
+    eq(book.progress, 25, "close persists the overall percent")
+    eq(book.last_local_position.chapter_uid, 22,
+        "close stores the full local position")
+end)
+
+test("suspend persists the reading chapter into the shelf record", function()
+    local f = fixture({
+        bookId = "book",
+        progress = 25,
+        chapterUid = 22,
+        chapterIdx = 2,
+        chapterOffset = 150,
+        updateTime = 10,
+    })
+    f.sync:on_reader_ready()
+    f.drain()
+    f.document.page = 40
+    f.sync:on_suspend()
+    local book = f.values.books.book
+    eq(book.chapter_uid, 33, "suspend persists the moved chapter uid")
+    eq(book.chapter_idx, 3, "suspend persists the moved chapter idx")
+    eq(book.progress, 40, "suspend persists the overall percent")
+end)
+
+test("close without any capturable position keeps the shelf record untouched", function()
+    local f = fixture()
+    -- Neither the document nor a previously captured position is available:
+    -- nothing about the reading position may reach the shelf record.
+    f.sync.get_document = function() return nil end
+    f.sync:on_close_document()
+    local book = f.values.books.book
+    eq(book.chapter_uid, nil, "missing position never writes a chapter uid")
+    eq(book.last_local_position, nil,
+        "missing position never writes a local position")
+end)
+
 print(string.format(
     "progress_sync_spec: %d checks, %d failure(s)", checks, failures))
 os.exit(failures == 0 and 0 or 1)

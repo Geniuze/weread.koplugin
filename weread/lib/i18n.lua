@@ -306,6 +306,7 @@ local zh = {
     ["Chapter %1"] = "第 %1 章",
     ["Chapter"] = "章节",
     ["Cached"] = "已缓存",
+    ["Reading"] = "阅读中",
     ["%1 words"] = "%1 字",
     ["Chapter list"] = "章节目录",
     ["Refresh chapter list"] = "刷新章节目录",

@@ -30,18 +30,20 @@ local ChapterRow = InputContainer:extend{
     width = nil,
     callback = nil,
     show_parent = nil,
+    current = false,
 }
 
 function ChapterRow:init()
     local padding = Size.padding.large
     local inner_width = self.width - 2 * padding
     local face = Font:getFace("cfont", 20)
-    local right = TextWidget:new{ text = self.status, face = face }
+    local right = TextWidget:new{ text = self.status, face = face, bold = self.current }
     local right_width = right:getSize().w
     local gap = Size.padding.large
     local left = TextWidget:new{
         text = self.text,
         face = face,
+        bold = self.current,
         max_width = math.max(1, inner_width - right_width - gap),
     }
     gap = math.max(gap, inner_width - left:getSize().w - right_width)
@@ -91,6 +93,7 @@ end
 local ChapterListView = FocusManager:extend{
     title = nil,
     chapters = nil,
+    current_index = nil,
     on_refresh = nil,
     on_select_download = nil,
     on_select = nil,
@@ -137,6 +140,7 @@ function ChapterListView:content()
             status = chapter.status,
             width = self.list_width,
             show_parent = self,
+            current = self.current_index == _i,
             callback = function()
                 if self.on_select then self.on_select(chapter.source) end
             end,
@@ -188,7 +192,17 @@ function ChapterListView:init()
     for _i, button in ipairs(self._toolbar_buttons) do outside_scroll[button] = true end
     FocusNav.apply(self, rows, { scroll = scroll, outside_scroll = outside_scroll })
     -- Chapters follow the toolbar row.
-    FocusNav.initialFocus(self, 1, #rows > 1 and 2 or 1)
+    local initial_row = #rows > 1 and 2 or 1
+    if type(self.current_index) == "number"
+        and self.current_index >= 1
+        and self.current_index + 1 <= #rows then
+        -- rows[1] is the toolbar; chapter rows start at layout row 2.
+        initial_row = self.current_index + 1
+    end
+    FocusNav.initialFocus(self, 1, initial_row)
+    -- Open at the current reading position: scroll the focused row to the
+    -- top of the scroll area (no-op when the list fits on one screen).
+    FocusNav.scrollFocusedToTop(self)
     self[1] = FrameContainer:new{
         background = Blitbuffer.COLOR_WHITE,
         bordersize = 0, padding = 0, margin = 0,
@@ -220,6 +234,7 @@ function M.show(data, callbacks)
     local view = ChapterListView:new{
         title = data.title,
         chapters = data.chapters,
+        current_index = data.current_index,
         on_refresh = callbacks.on_refresh,
         on_select_download = callbacks.on_select_download,
         on_select = callbacks.on_select,
