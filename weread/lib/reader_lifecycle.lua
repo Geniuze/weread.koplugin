@@ -102,6 +102,88 @@ function M:handleEndOfBook(status_self)
     return self._orig_onEndOfBook(status_self)
 end
 
+-- Start-of-chapter backward navigation. KOReader emits no event when a
+-- backward page turn bumps against the first page, so wrap the rolling
+-- relative-page-turn handler: at the very start of a single downloaded
+-- chapter with a predecessor, open that chapter instead of a silent no-op.
+-- WeRead chapter files are EPUBs, so ReaderRolling is the only paging module
+-- that ever hosts them.
+function M:_isAtDocumentStart()
+    local document = self.ui and self.ui.document
+    if not document then return false end
+    local view_mode = self.ui.view and self.ui.view.view_mode
+    if view_mode == "page" then
+        local visible = 1
+        if type(document.getVisiblePageNumberCount) == "function" then
+            visible = tonumber(document:getVisiblePageNumberCount()) or 1
+        end
+        local page = type(document.getCurrentPage) == "function"
+            and tonumber(document:getCurrentPage()) or nil
+        return page ~= nil and page <= visible
+    end
+    local pos = type(document.getCurrentPos) == "function"
+        and tonumber(document:getCurrentPos()) or nil
+    return pos ~= nil and pos <= 0
+end
+
+-- The books table is rebuilt by settings:get on every call, so resolve the
+-- previous chapter once per document and reuse the verdict on later turns.
+-- A result with prev_ch == nil is cached too: no navigation is also a stable
+-- per-file answer (full-book EPUB, first chapter, unknown position).
+function M:_buildStartTurnContext(file)
+    local ctx = { file = file }
+    local book_id = self._current_weread_book_id or self:detectWeReadBook()
+    if not book_id then return ctx end
+    local books = self.settings:get("books", {})
+    local book = books[tostring(book_id)] or books[book_id]
+    if not book then return ctx end
+    self:ensureChaptersLoaded(book)
+    local current_idx, _, is_full_book = self:getChapterInfoFromFile(book, file)
+    if not current_idx or is_full_book then return ctx end
+    ctx.book = book
+    ctx.prev_ch = current_idx > 1 and book.chapters[current_idx - 1] or nil
+    return ctx
+end
+
+function M:_openPrevChapterAtStart()
+    if not self:_isAtDocumentStart() then return false end
+    local file = self.ui.document and self.ui.document.file
+    if not file then return false end
+    local ctx = self._start_turn_ctx
+    if not ctx or ctx.file ~= file then
+        ctx = self:_buildStartTurnContext(file)
+        self._start_turn_ctx = ctx
+    end
+    if not ctx.book or not ctx.prev_ch then return false end
+    self:openChapter(ctx.book, ctx.prev_ch)
+    return true
+end
+
+function M:_installStartOfChapterTurn()
+    self._start_turn_ctx = nil
+    if self._orig_rolling_goto_view_rel then return true end
+    local rolling = self.ui and self.ui.rolling
+    if not rolling or type(rolling.onGotoViewRel) ~= "function" then
+        return false
+    end
+    self._orig_rolling_goto_view_rel = rolling.onGotoViewRel
+    rolling.onGotoViewRel = function(rolling_self, diff, ...)
+        if diff and diff < 0 and self:_openPrevChapterAtStart() then
+            return true
+        end
+        return self._orig_rolling_goto_view_rel(rolling_self, diff, ...)
+    end
+    return true
+end
+
+function M:_removeStartOfChapterTurn()
+    if self._orig_rolling_goto_view_rel and self.ui and self.ui.rolling then
+        self.ui.rolling.onGotoViewRel = self._orig_rolling_goto_view_rel
+    end
+    self._orig_rolling_goto_view_rel = nil
+    self._start_turn_ctx = nil
+end
+
 function M:onReaderReady()
     self._reader_session_gen = (self._reader_session_gen or 0) + 1
     local perf = PluginUtil.reader_open_perf
@@ -135,11 +217,13 @@ function M:onReaderReady()
                 return self:handleEndOfBook(status_self)
             end
         end
+        self:_installStartOfChapterTurn()
     else
         if self._orig_onEndOfBook and self.ui.status then
             self.ui.status.onEndOfBook = self._orig_onEndOfBook
             self._orig_onEndOfBook = nil
         end
+        self:_removeStartOfChapterTurn()
     end
 
     -- Register the EPUB-safe external annotation prototype for any CREngine
@@ -195,6 +279,7 @@ function M:onCloseDocument()
         self.ui.status.onEndOfBook = self._orig_onEndOfBook
         self._orig_onEndOfBook = nil
     end
+    self:_removeStartOfChapterTurn()
 
     self.read_report:on_close_document()
 end
